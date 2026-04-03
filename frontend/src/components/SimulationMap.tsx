@@ -10,6 +10,12 @@ const NODE_SOURCE_ID = 'simulation-nodes'
 const PATH_SOURCE_ID = 'simulation-paths'
 const NODE_LAYER_ID = 'simulation-node-circles'
 const PATH_LAYER_ID = 'simulation-path-lines'
+const UNITED_STATES_BOUNDS: [[number, number], [number, number]] = [
+  [-127.5, 23.0],
+  [-65.0, 50.5],
+]
+const UNITED_STATES_CENTER: [number, number] = [-98.5, 39.8]
+const UNITED_STATES_MIN_ZOOM = 3.1
 
 const PATH_TYPE_COLORS: Record<PathType, string> = {
   balanced: '#d39d1a',
@@ -190,8 +196,10 @@ export function SimulationMap({
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
       style: MAP_STYLE_URL,
-      center: [-96.5, 39.5],
-      zoom: 3.35,
+      center: UNITED_STATES_CENTER,
+      zoom: 3.45,
+      maxBounds: UNITED_STATES_BOUNDS,
+      minZoom: UNITED_STATES_MIN_ZOOM,
       attributionControl: false,
     })
 
@@ -387,6 +395,9 @@ export function SimulationMap({
         maxZoom: 5.2,
         duration: 900,
       })
+      if (map.getZoom() < UNITED_STATES_MIN_ZOOM) {
+        map.setZoom(UNITED_STATES_MIN_ZOOM)
+      }
       hasFittedRef.current = true
     }
   }, [displayedPaths.length, nodeCollection, nodes, pathCollection])
