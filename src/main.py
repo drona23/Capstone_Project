@@ -18,6 +18,7 @@ try:
         build_random_forest_pipeline,
         fit_regressor,
     )
+    from .weather_loader import load_weather_dataset, merge_weather_features
 except ImportError:
     from data_loader import load_dataset
     from evaluate import (
@@ -28,6 +29,7 @@ except ImportError:
     )
     from preprocessing import build_modeling_frame
     from train import build_baseline_pipeline, build_random_forest_pipeline, fit_regressor
+    from weather_loader import load_weather_dataset, merge_weather_features
 
 
 def load_data_step(data_path: str | None = None):
@@ -38,6 +40,15 @@ def load_data_step(data_path: str | None = None):
 def preprocess_data_step(df):
     """Transform the raw dataset into features and targets."""
     return build_modeling_frame(df)
+
+
+def enrich_with_weather_step(df, weather_path: str | None = None):
+    """Optionally enrich the main dataset with weather features."""
+    if not weather_path:
+        return df, None
+
+    weather_df = load_weather_dataset(weather_path)
+    return merge_weather_features(df, weather_df)
 
 
 def split_data_step(X, y_wue, y_carbon, test_size: float, random_state: int):
@@ -78,11 +89,13 @@ def evaluate_target_step(baseline_model, trained_model, X_test, y_test):
 
 def run_pipeline(
     data_path: str | None = None,
+    weather_path: str | None = None,
     test_size: float = 0.2,
     random_state: int = 42,
 ):
     """Execute the full pipeline from loading through evaluation."""
     df = load_data_step(data_path)
+    df, weather_info = enrich_with_weather_step(df, weather_path=weather_path)
     X, y_wue, y_carbon = preprocess_data_step(df)
     (
         X_train,
@@ -99,6 +112,7 @@ def run_pipeline(
     )
 
     return {
+        "weather": weather_info,
         "wue": evaluate_target_step(wue_baseline, wue_model, X_test, y_wue_test),
         "carbon_intensity": evaluate_target_step(
             carbon_baseline, carbon_model, X_test, y_carbon_test
@@ -115,6 +129,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional path to dataset (.xlsx). Defaults to data/sample_dataset.xlsx.",
     )
+    parser.add_argument(
+        "--weather-path",
+        default=None,
+        help="Optional path to the weather master CSV or its directory.",
+    )
     parser.add_argument("--test-size", type=float, default=0.2, help="Test split size.")
     parser.add_argument(
         "--random-state",
@@ -129,9 +148,20 @@ def main() -> None:
     args = parse_args()
     results = run_pipeline(
         data_path=args.data_path,
+        weather_path=args.weather_path,
         test_size=args.test_size,
         random_state=args.random_state,
     )
+
+    if results["weather"] is not None:
+        print("Weather enrichment")
+        print(f"  Join strategy: {results['weather']['join_strategy']}")
+        print(
+            "  Matched rows: "
+            f"{results['weather']['matched_rows']}/{results['weather']['total_rows']}"
+        )
+        print(f"  Coverage: {results['weather']['coverage']:.2%}")
+        print("")
 
     print("WUE results")
     print_metrics("WUE model", results["wue"]["model"])

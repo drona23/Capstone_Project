@@ -72,6 +72,10 @@ Both models use:
 - `RandomForestRegressor` as the baseline estimator
 - a train/test split for out-of-sample evaluation
 
+The pipeline can also optionally merge hourly weather features before training,
+including temperature, dew point, humidity, precipitation, wind, pressure, and
+derived weather stress indicators.
+
 The dependency stack also includes `xgboost` and `prophet` so the project can
 expand into stronger gradient-boosted baselines and time-aware forecasting
 experiments in later iterations.
@@ -133,6 +137,12 @@ Optional example with custom settings:
 python3 -m src.main --data-path data/sample_dataset.xlsx --test-size 0.25 --random-state 7
 ```
 
+Optional example with external weather enrichment:
+
+```bash
+python3 -m src.main --data-path data/sample_dataset.xlsx --weather-path ../weather_zip_city_2019_2023_meteostat
+```
+
 ### 4. Explore the Notebook
 
 The exploratory analysis notebook is located at:
@@ -156,7 +166,8 @@ Capstone_Research/
 │   ├── preprocessing.py
 │   ├── main.py
 │   ├── train.py
-│   └── evaluate.py
+│   ├── evaluate.py
+│   └── weather_loader.py
 ├── requirements.txt
 ├── .gitignore
 └── README.md
