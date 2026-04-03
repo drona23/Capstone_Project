@@ -1,15 +1,25 @@
 # Python cache/artifacts
 __pycache__/
+*.pyc
 *.py[cod]
 *.pyo
 *.pyd
 
 # Virtual environments
+.env
 .venv/
 venv/
 
 # Notebook checkpoints
 .ipynb_checkpoints/
+
+# Large local data files
+data/*.csv
+data/*.xlsx
+data/*.parquet
+data/*.feather
+data/*.h5
+data/*.zip
 
 # Local outputs
 models/
