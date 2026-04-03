@@ -581,6 +581,109 @@ class SustainabilitySchedulingBackend:
 
         return {"title": title, "summary": summary}
 
+    @staticmethod
+    def select_baseline_path(paths: list[dict[str, Any]]) -> dict[str, Any] | None:
+        if not paths:
+            return None
+
+        same_city_paths = [
+            path for path in paths if path.get("path") and path["path"][0] == path["path"][-1]
+        ]
+        scoped = same_city_paths if same_city_paths else paths
+        return min(
+            scoped,
+            key=lambda path: (
+                float(path.get("latency", 0.0)),
+                float(path.get("score", 0.0)),
+            ),
+        )
+
+    @staticmethod
+    def compare_paths(
+        selected_path: dict[str, Any],
+        baseline_path: dict[str, Any] | None,
+    ) -> dict[str, float]:
+        if not selected_path:
+            return {
+                "co2_reduction_pct": 0.0,
+                "water_reduction_pct": 0.0,
+                "latency_delta_ms": 0.0,
+                "latency_delta_pct": 0.0,
+            }
+
+        baseline = baseline_path or selected_path
+
+        def reduction(old: float, new: float) -> float:
+            if old == 0:
+                return 0.0
+            return ((old - new) / old) * 100.0
+
+        def delta_pct(new: float, old: float) -> float:
+            if old == 0:
+                return 0.0
+            return ((new - old) / old) * 100.0
+
+        selected_co2 = float(selected_path.get("co2", 0.0))
+        selected_wue = float(selected_path.get("wue", 0.0))
+        selected_latency = float(selected_path.get("latency", 0.0))
+        baseline_co2 = float(baseline.get("co2", selected_co2))
+        baseline_wue = float(baseline.get("wue", selected_wue))
+        baseline_latency = float(baseline.get("latency", selected_latency))
+
+        return {
+            "co2_reduction_pct": reduction(baseline_co2, selected_co2),
+            "water_reduction_pct": reduction(baseline_wue, selected_wue),
+            "latency_delta_ms": selected_latency - baseline_latency,
+            "latency_delta_pct": delta_pct(selected_latency, baseline_latency),
+        }
+
+    @classmethod
+    def build_path_story(
+        cls,
+        selected_path: dict[str, Any],
+        all_paths: list[dict[str, Any]],
+        baseline_path: dict[str, Any] | None = None,
+    ) -> dict[str, str]:
+        if not selected_path:
+            return {
+                "title": "No recommendation available",
+                "summary": "The system could not generate a feasible route for the selected hour.",
+            }
+
+        comparison = cls.compare_paths(selected_path, baseline_path)
+        selected_label = PATH_TYPE_LABELS.get(
+            str(selected_path.get("type", "balanced")),
+            str(selected_path.get("type", "balanced")).replace("_", " ").title(),
+        )
+        destination = selected_path["path"][-1]
+
+        strongest_driver = max(
+            [
+                ("carbon", comparison["co2_reduction_pct"]),
+                ("water", comparison["water_reduction_pct"]),
+                ("latency", -comparison["latency_delta_pct"]),
+            ],
+            key=lambda item: item[1],
+        )[0]
+
+        if strongest_driver == "carbon":
+            rationale = "lower carbon intensity at the destination"
+        elif strongest_driver == "water":
+            rationale = "lower water stress and better water efficiency"
+        else:
+            rationale = "a smaller latency penalty than the alternatives"
+
+        summary = (
+            f"The recommended route sends the workload to {destination} using the {selected_label.lower()} option. "
+            f"Compared with the baseline route, it changes CO2 by {comparison['co2_reduction_pct']:+.1f}% "
+            f"and water impact by {comparison['water_reduction_pct']:+.1f}%, with latency moving "
+            f"{comparison['latency_delta_ms']:+.1f} ms. The recommendation is driven mainly by {rationale}."
+        )
+        return {
+            "title": f"Why {destination} is recommended",
+            "summary": summary,
+        }
+
 
 def run_scheduler(
     backend: SustainabilitySchedulingBackend,

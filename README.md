@@ -217,19 +217,28 @@ The exploratory analysis notebook is located at:
 It can be used to inspect distributions, temporal trends, regional differences,
 and feature relationships before formal model training.
 
-### 7. Launch the Streamlit App
+### 7. Launch the API
+
+```bash
+uvicorn src.api:app --reload
+```
+
+### 8. Launch the Streamlit Simulation
 
 ```bash
 streamlit run app.py
 ```
 
-The app currently includes:
+The presentation interface is now a single-page simulation view:
 
-- an `Overview` page with KPI cards, a dynamic time window, and a city map
-  where color tracks CO2 intensity and size tracks WUE
-- a `Scheduler Simulator` page with multi-objective controls, backend
-  scheduling calls, multi-path routing options, a comparison table, and PyDeck
-  path visualization
+- a large map that shows data-center nodes, water-scarcity shading, and
+  multi-path routing options
+- a compact control panel for priority, objective weights, and simulation hour
+- a result panel that explains the recommended route and compares it with a
+  naive baseline
+
+The Streamlit front end calls the FastAPI `POST /simulate` endpoint and renders
+the returned routing candidates for stakeholder demos.
 
 ## Project Structure
 
@@ -253,6 +262,7 @@ Capstone_Research/
 ├── src/
 │   ├── __init__.py
 │   ├── app_backend.py
+│   ├── api.py
 │   ├── data_loader.py
 │   ├── evaluate.py
 │   ├── main.py
@@ -264,7 +274,6 @@ Capstone_Research/
 │   └── workload_loader.py
 ├── ui/
 │   ├── __init__.py
-│   ├── overview.py
 │   └── scheduler.py
 ├── utils/
 │   ├── __init__.py
