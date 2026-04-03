@@ -1,4 +1,10 @@
-import type { SchedulerContext, SimulationRequest, SimulationResponse } from '../lib/types'
+import type {
+  BatchSimulationRequest,
+  BatchSimulationResponse,
+  SchedulerContext,
+  SimulationRequest,
+  SimulationResponse,
+} from '../lib/types'
 
 const rawBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim()
 const API_BASE_URL = rawBaseUrl ? rawBaseUrl.replace(/\/$/, '') : '/api'
@@ -26,6 +32,15 @@ export function loadContext(): Promise<SchedulerContext> {
 
 export function runSimulation(payload: SimulationRequest): Promise<SimulationResponse> {
   return fetchJson<SimulationResponse>('/simulate', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function runBatchSimulation(
+  payload: BatchSimulationRequest,
+): Promise<BatchSimulationResponse> {
+  return fetchJson<BatchSimulationResponse>('/simulate-batch', {
     method: 'POST',
     body: JSON.stringify(payload),
   })

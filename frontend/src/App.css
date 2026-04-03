@@ -186,11 +186,24 @@
   color: #142d22;
 }
 
+.field__value {
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(16, 38, 31, 0.08);
+  background: #f5faf7;
+  color: #173124;
+  font-weight: 600;
+}
+
 .segmented-control {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
   grid-column: 1 / -1;
+}
+
+.segmented-control--modes {
+  margin-bottom: 16px;
 }
 
 .segmented-control button {
@@ -298,6 +311,10 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 16px;
+}
+
+.metric-grid--batch {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .metric-card {
@@ -444,6 +461,16 @@
 .path-tag--low_latency {
   background: rgba(207, 47, 47, 0.12);
   color: #ab2a2a;
+}
+
+.path-tag--optimized {
+  background: rgba(31, 143, 87, 0.14);
+  color: #1f6f46;
+}
+
+.path-tag--baseline {
+  background: rgba(123, 135, 150, 0.16);
+  color: #4a5563;
 }
 
 .inline-error,

@@ -3,7 +3,14 @@ import type { Feature, FeatureCollection, LineString, Point } from 'geojson'
 import maplibregl, { LngLatBounds, type Map as MapLibreMap, type Popup } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
-import type { CompareMode, PathCandidate, PathType, SimulationNode } from '../lib/types'
+import type {
+  BatchFlow,
+  CompareMode,
+  PathCandidate,
+  PathType,
+  SimulationMode,
+  SimulationNode,
+} from '../lib/types'
 
 const MAP_STYLE_URL = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
 const NODE_SOURCE_ID = 'simulation-nodes'
@@ -25,13 +32,10 @@ const PATH_TYPE_COLORS: Record<PathType, string> = {
   baseline: '#677282',
 }
 
-const PATH_TYPE_LABELS: Record<PathType, string> = {
-  balanced: 'Balanced',
-  low_carbon: 'Low Carbon',
-  low_water: 'Low Water',
-  low_latency: 'Low Latency',
-  baseline: 'Baseline',
-}
+const FLOW_SCENARIO_COLORS = {
+  optimized: '#1f8f57',
+  baseline: '#7b8796',
+} as const
 
 type NodeProperties = {
   city: string
@@ -43,23 +47,28 @@ type NodeProperties = {
   has_data_center: number
 }
 
-type PathProperties = {
+type LineProperties = {
   route: string
-  type: PathType
   typeLabel: string
   co2: number
-  wue: number
+  water: number
   latency: number
   score: number
   lineColor: string
   lineWidth: number
   arrow: string
+  jobs?: number
+  scenario?: string
 }
 
 interface SimulationMapProps {
+  mode: SimulationMode
   nodes: SimulationNode[]
   paths: PathCandidate[]
+  flows: BatchFlow[]
+  baselineFlows: BatchFlow[]
   selectedPathType: PathType | null
+  selectedFlowId: string | null
   compareMode: CompareMode
   recommendedPath: PathCandidate | null
   baselinePath: PathCandidate | null
@@ -99,13 +108,24 @@ function buildDisplayedPaths(
   return paths
 }
 
+function buildDisplayedFlows(
+  compareMode: CompareMode,
+  flows: BatchFlow[],
+  baselineFlows: BatchFlow[],
+): BatchFlow[] {
+  if (compareMode === 'baseline') {
+    return [...baselineFlows, ...flows]
+  }
+  return flows
+}
+
 function buildPathCollection(
   paths: PathCandidate[],
   selectedPathType: PathType | null,
-): FeatureCollection<LineString, PathProperties> {
+): FeatureCollection<LineString, LineProperties> {
   return {
     type: 'FeatureCollection',
-    features: paths.map<Feature<LineString, PathProperties>>((path) => {
+    features: paths.map<Feature<LineString, LineProperties>>((path) => {
       const isHighlighted = selectedPathType === null || selectedPathType === path.type
       return {
         type: 'Feature',
@@ -118,14 +138,54 @@ function buildPathCollection(
         },
         properties: {
           route: path.route,
-          type: path.type,
-          typeLabel: PATH_TYPE_LABELS[path.type],
+          typeLabel: path.type.replace('_', ' '),
           co2: path.co2,
-          wue: path.wue,
+          water: path.water_liters,
           latency: path.latency,
           score: path.score,
           lineColor: PATH_TYPE_COLORS[path.type],
           lineWidth: isHighlighted ? 6.5 : 3.5,
+          arrow: '▶',
+        },
+      }
+    }),
+  }
+}
+
+function buildFlowCollection(
+  flows: BatchFlow[],
+  selectedFlowId: string | null,
+): FeatureCollection<LineString, LineProperties> {
+  const jobs = flows.map((flow) => flow.jobs)
+  const minJobs = jobs.length > 0 ? Math.min(...jobs) : 1
+  const maxJobs = jobs.length > 0 ? Math.max(...jobs) : 1
+  const span = Math.max(1, maxJobs - minJobs)
+
+  return {
+    type: 'FeatureCollection',
+    features: flows.map<Feature<LineString, LineProperties>>((flow) => {
+      const emphasized = selectedFlowId === null || selectedFlowId === flow.flow_id
+      const width = 3.5 + ((flow.jobs - minJobs) / span) * 6.5 + (emphasized ? 1.5 : 0)
+      return {
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: [
+            [flow.origin_longitude, flow.origin_latitude],
+            [flow.destination_longitude, flow.destination_latitude],
+          ],
+        },
+        properties: {
+          route: flow.route,
+          typeLabel: flow.scenario === 'optimized' ? 'Optimized batch flow' : 'Baseline batch flow',
+          co2: flow.co2,
+          water: flow.water_liters,
+          latency: flow.latency,
+          score: flow.score,
+          jobs: flow.jobs,
+          scenario: flow.scenario,
+          lineColor: FLOW_SCENARIO_COLORS[flow.scenario],
+          lineWidth: width,
           arrow: '▶',
         },
       }
@@ -153,22 +213,28 @@ function nodePopupHtml(properties: NodeProperties): string {
   `
 }
 
-function pathPopupHtml(properties: PathProperties): string {
+function linePopupHtml(properties: LineProperties): string {
+  const batchLine = typeof properties.jobs === 'number' ? `<div>Jobs: ${properties.jobs}</div>` : ''
   return `
     <div class="map-popup">
       <div class="map-popup__title">${properties.route}</div>
-      <div>${properties.typeLabel} route</div>
+      <div>${properties.typeLabel}</div>
+      ${batchLine}
       <div>CO2: ${properties.co2.toFixed(2)} kg</div>
-      <div>WUE: ${properties.wue.toFixed(3)} L/kWh</div>
+      <div>Water: ${properties.water.toFixed(2)} L</div>
       <div>Latency: ${properties.latency.toFixed(1)} ms</div>
     </div>
   `
 }
 
 export function SimulationMap({
+  mode,
   nodes,
   paths,
+  flows,
+  baselineFlows,
   selectedPathType,
+  selectedFlowId,
   compareMode,
   recommendedPath,
   baselinePath,
@@ -182,10 +248,17 @@ export function SimulationMap({
     () => buildDisplayedPaths(compareMode, paths, recommendedPath, baselinePath),
     [baselinePath, compareMode, paths, recommendedPath],
   )
+  const displayedFlows = useMemo(
+    () => buildDisplayedFlows(compareMode, flows, baselineFlows),
+    [baselineFlows, compareMode, flows],
+  )
   const nodeCollection = useMemo(() => buildNodeCollection(nodes), [nodes])
-  const pathCollection = useMemo(
-    () => buildPathCollection(displayedPaths, selectedPathType),
-    [displayedPaths, selectedPathType],
+  const lineCollection = useMemo(
+    () =>
+      mode === 'batch'
+        ? buildFlowCollection(displayedFlows, selectedFlowId)
+        : buildPathCollection(displayedPaths, selectedPathType),
+    [displayedFlows, displayedPaths, mode, selectedFlowId, selectedPathType],
   )
 
   useEffect(() => {
@@ -221,7 +294,7 @@ export function SimulationMap({
       })
       map.addSource(PATH_SOURCE_ID, {
         type: 'geojson',
-        data: pathCollection,
+        data: lineCollection,
       })
 
       map.addLayer({
@@ -258,7 +331,12 @@ export function SimulationMap({
         paint: {
           'line-color': ['to-color', ['get', 'lineColor']],
           'line-width': ['coalesce', ['get', 'lineWidth'], 4],
-          'line-opacity': 0.95,
+          'line-opacity': [
+            'case',
+            ['==', ['get', 'scenario'], 'baseline'],
+            0.52,
+            0.94,
+          ],
         },
       })
 
@@ -275,7 +353,7 @@ export function SimulationMap({
         },
         paint: {
           'text-color': ['to-color', ['get', 'lineColor']],
-          'text-opacity': 0.92,
+          'text-opacity': 0.88,
         },
       })
 
@@ -313,7 +391,7 @@ export function SimulationMap({
           return
         }
         popup
-          .setLngLat((feature.geometry.coordinates as [number, number]))
+          .setLngLat(feature.geometry.coordinates as [number, number])
           .setHTML(nodePopupHtml(feature.properties as unknown as NodeProperties))
           .addTo(map)
       })
@@ -327,7 +405,7 @@ export function SimulationMap({
         }
         popup
           .setLngLat(event.lngLat)
-          .setHTML(pathPopupHtml(feature.properties as unknown as PathProperties))
+          .setHTML(linePopupHtml(feature.properties as unknown as LineProperties))
           .addTo(map)
       })
     })
@@ -338,7 +416,7 @@ export function SimulationMap({
       mapRef.current = null
       popupRef.current = null
     }
-  }, [nodeCollection, pathCollection])
+  }, [lineCollection, nodeCollection])
 
   useEffect(() => {
     const map = mapRef.current
@@ -349,10 +427,10 @@ export function SimulationMap({
     const nodeSource = map.getSource(NODE_SOURCE_ID) as maplibregl.GeoJSONSource | undefined
     const pathSource = map.getSource(PATH_SOURCE_ID) as maplibregl.GeoJSONSource | undefined
     nodeSource?.setData(nodeCollection)
-    pathSource?.setData(pathCollection)
+    pathSource?.setData(lineCollection)
 
-    const [co2Min, co2Max] = extent(nodes.map((node) => node.avg_co2_intensity))
-    const [wueMin, wueMax] = extent(nodes.map((node) => node.avg_wue))
+    const [co2Min, co2Max] = extent(nodes.map((node) => Number(node.avg_co2_intensity)))
+    const [wueMin, wueMax] = extent(nodes.map((node) => Number(node.avg_wue)))
 
     map.setPaintProperty(NODE_LAYER_ID, 'circle-color', [
       'interpolate',
@@ -384,7 +462,7 @@ export function SimulationMap({
     nodes.forEach((node) => {
       bounds.extend([node.longitude, node.latitude])
     })
-    if (!bounds.isEmpty() && (!hasFittedRef.current || displayedPaths.length > 0)) {
+    if (!bounds.isEmpty() && (!hasFittedRef.current || lineCollection.features.length > 0)) {
       map.fitBounds(bounds, {
         padding: {
           top: 70,
@@ -400,7 +478,7 @@ export function SimulationMap({
       }
       hasFittedRef.current = true
     }
-  }, [displayedPaths.length, nodeCollection, nodes, pathCollection])
+  }, [lineCollection, nodeCollection, nodes])
 
   return <div className="simulation-map" ref={mapContainerRef} />
 }

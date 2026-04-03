@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -44,6 +45,35 @@ class ScheduleCandidate:
     score: float
     expected_co2_kg: float
     expected_water_liters: float
+    start_index: int
+    end_index: int
+
+
+@dataclass
+class PreparedCityMetrics:
+    co2_prefix: np.ndarray
+    water_prefix: np.ndarray
+    valid_prefix: np.ndarray
+
+
+@dataclass
+class PreparedSchedulerState:
+    time_index: pd.DatetimeIndex
+    time_values: np.ndarray
+    city_metrics: dict[str, PreparedCityMetrics]
+    dc_records: list[dict[str, Any]]
+
+
+@dataclass
+class RouteFlow:
+    route: str
+    origin_city: str
+    assigned_city: str
+    jobs: int
+    total_co2_kg: float
+    total_water_liters: float
+    avg_scheduler_score: float
+    avg_latency_ms: float
 
 
 def build_job_record(
@@ -142,72 +172,141 @@ def prepare_environment_frame(
     return env_df
 
 
-def _build_environment_lookup(env_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    lookup: dict[str, pd.DataFrame] = {}
+def _prefix_sum(values: np.ndarray) -> np.ndarray:
+    return np.concatenate(([0.0], np.cumsum(values, dtype=np.float64)))
+
+
+def prepare_scheduler_state(
+    env_df: pd.DataFrame,
+    dc_df: pd.DataFrame,
+) -> PreparedSchedulerState:
+    if env_df.empty:
+        raise ValueError("Environment frame is empty; cannot prepare scheduler state.")
+
+    time_index = pd.date_range(
+        start=pd.Timestamp(env_df["timestamp"].min()).floor("h"),
+        end=pd.Timestamp(env_df["timestamp"].max()).floor("h"),
+        freq="h",
+    )
+    city_metrics: dict[str, PreparedCityMetrics] = {}
+
     for city, city_df in env_df.groupby("city"):
-        lookup[city] = city_df.set_index("timestamp").sort_index()
-    return lookup
+        aligned = city_df.set_index("timestamp").sort_index().reindex(time_index)
+        co2 = pd.to_numeric(aligned["predicted_co2_intensity"], errors="coerce").to_numpy(dtype=float)
+        water = pd.to_numeric(aligned["predicted_water_intensity"], errors="coerce").to_numpy(dtype=float)
+        valid = np.isfinite(co2) & np.isfinite(water)
+        city_metrics[str(city)] = PreparedCityMetrics(
+            co2_prefix=_prefix_sum(np.where(valid, co2, 0.0)),
+            water_prefix=_prefix_sum(np.where(valid, water, 0.0)),
+            valid_prefix=_prefix_sum(valid.astype(float)),
+        )
+
+    dc_records: list[dict[str, Any]] = []
+    for _, row in dc_df.iterrows():
+        dc_records.append(
+            {
+                "dc_id": str(row["dc_id"]),
+                "city": str(row["city"]),
+                "max_power_per_hour": float(row["max_power_per_hour"]),
+                "pue": float(row["pue"]),
+                "water_usage_factor": float(row["water_usage_factor"]),
+                "region_water_scarcity": float(row["region_water_scarcity"]),
+            }
+        )
+
+    return PreparedSchedulerState(
+        time_index=time_index,
+        time_values=time_index.to_numpy(dtype="datetime64[ns]"),
+        city_metrics=city_metrics,
+        dc_records=dc_records,
+    )
 
 
-def _candidate_starts(
-    time_index: pd.DatetimeIndex, earliest_start: pd.Timestamp, latest_start: pd.Timestamp
-) -> list[pd.Timestamp]:
-    mask = (time_index >= earliest_start) & (time_index <= latest_start)
-    return list(time_index[mask])
+def _initialize_capacity_state(state: PreparedSchedulerState) -> dict[str, np.ndarray]:
+    horizon = len(state.time_index)
+    return {
+        str(record["dc_id"]): np.zeros(horizon, dtype=np.float32)
+        for record in state.dc_records
+    }
+
+
+def _candidate_start_positions(
+    state: PreparedSchedulerState,
+    earliest_start: pd.Timestamp,
+    latest_start: pd.Timestamp,
+    duration_hours: int,
+) -> np.ndarray:
+    if duration_hours <= 0 or duration_hours > len(state.time_index):
+        return np.empty(0, dtype=np.int32)
+
+    start_value = np.datetime64(pd.Timestamp(earliest_start).floor("h").to_datetime64(), "ns")
+    end_value = np.datetime64(pd.Timestamp(latest_start).floor("h").to_datetime64(), "ns")
+    lower = int(np.searchsorted(state.time_values, start_value, side="left"))
+    upper = int(np.searchsorted(state.time_values, end_value, side="right")) - 1
+    upper = min(upper, len(state.time_index) - duration_hours)
+    if lower > upper:
+        return np.empty(0, dtype=np.int32)
+    return np.arange(lower, upper + 1, dtype=np.int32)
+
+
+def _window_is_valid(city_metrics: PreparedCityMetrics, start_index: int, end_index: int) -> bool:
+    valid_count = city_metrics.valid_prefix[end_index] - city_metrics.valid_prefix[start_index]
+    return bool(valid_count >= (end_index - start_index))
+
+
+def _window_mean(prefix: np.ndarray, start_index: int, end_index: int) -> float:
+    span = max(1, end_index - start_index)
+    return float((prefix[end_index] - prefix[start_index]) / span)
 
 
 def _candidate_score(
-    metrics: pd.DataFrame,
-    dc_row: pd.Series,
+    co2_mean: float,
+    water_mean: float,
+    dc_record: dict[str, Any],
     origin_city: str,
     alpha: float,
     beta: float,
     gamma: float,
 ) -> tuple[float, float, float]:
-    co2_component = (
-        metrics["predicted_co2_intensity"].mean()
-        * float(dc_row["pue"])
-    )
+    co2_component = co2_mean * float(dc_record["pue"])
     water_component = (
-        metrics["predicted_water_intensity"].mean()
-        * float(dc_row["water_usage_factor"])
-        * float(dc_row["region_water_scarcity"])
+        water_mean
+        * float(dc_record["water_usage_factor"])
+        * float(dc_record["region_water_scarcity"])
     )
-    latency_penalty = gamma if origin_city != dc_row["city"] else 0.0
+    latency_penalty = gamma if origin_city != str(dc_record["city"]) else 0.0
     score = alpha * co2_component + beta * water_component + latency_penalty
     return float(score), float(co2_component), float(water_component)
 
 
 def _capacity_available(
-    used_capacity: dict[tuple[str, pd.Timestamp], float],
+    used_capacity: dict[str, np.ndarray],
     dc_id: str,
-    hours: pd.DatetimeIndex,
+    start_index: int,
+    end_index: int,
     required_power: float,
     max_power_per_hour: float,
 ) -> bool:
-    for ts in hours:
-        current = used_capacity.get((dc_id, ts), 0.0)
-        if current + required_power > max_power_per_hour:
-            return False
-    return True
+    window = used_capacity[dc_id][start_index:end_index]
+    if window.size == 0:
+        return False
+    return float(window.max()) + required_power <= max_power_per_hour
 
 
 def _reserve_capacity(
-    used_capacity: dict[tuple[str, pd.Timestamp], float],
+    used_capacity: dict[str, np.ndarray],
     dc_id: str,
-    hours: pd.DatetimeIndex,
+    start_index: int,
+    end_index: int,
     required_power: float,
 ) -> None:
-    for ts in hours:
-        used_capacity[(dc_id, ts)] = used_capacity.get((dc_id, ts), 0.0) + required_power
+    used_capacity[dc_id][start_index:end_index] += required_power
 
 
 def _enumerate_candidates(
     job: pd.Series,
-    dc_df: pd.DataFrame,
-    env_lookup: dict[str, pd.DataFrame],
-    time_index: pd.DatetimeIndex,
-    used_capacity: dict[tuple[str, pd.Timestamp], float] | None,
+    prepared_state: PreparedSchedulerState,
+    used_capacity: dict[str, np.ndarray] | None,
     alpha: float,
     beta: float,
     gamma: float,
@@ -220,70 +319,81 @@ def _enumerate_candidates(
     if latest_start < earliest_start:
         return []
 
-    starts = _candidate_starts(time_index, earliest_start, latest_start)
-    if not starts:
+    start_positions = _candidate_start_positions(
+        prepared_state,
+        earliest_start,
+        latest_start,
+        duration_hours,
+    )
+    if start_positions.size == 0:
         return []
 
+    capacity_state = used_capacity or _initialize_capacity_state(prepared_state)
     candidates: list[ScheduleCandidate] = []
-    capacity_state = used_capacity or {}
-    for _, dc_row in dc_df.iterrows():
-        city = dc_row["city"]
-        city_env = env_lookup.get(city)
-        if city_env is None:
+    origin_city = str(job["origin_city"])
+
+    for dc_record in prepared_state.dc_records:
+        city = str(dc_record["city"])
+        city_metrics = prepared_state.city_metrics.get(city)
+        if city_metrics is None:
             continue
 
-        for start_time in starts:
-            hours = pd.date_range(start=start_time, periods=duration_hours, freq="h")
-            metrics = city_env.reindex(hours)
-            if metrics[["predicted_co2_intensity", "predicted_water_intensity"]].isna().any().any():
+        dc_id = str(dc_record["dc_id"])
+        for start_index in start_positions:
+            end_index = int(start_index + duration_hours)
+            if not _window_is_valid(city_metrics, int(start_index), end_index):
                 continue
-
             if not _capacity_available(
                 capacity_state,
-                str(dc_row["dc_id"]),
-                hours,
+                dc_id,
+                int(start_index),
+                end_index,
                 required_power,
-                float(dc_row["max_power_per_hour"]),
+                float(dc_record["max_power_per_hour"]),
             ):
                 continue
 
+            co2_mean = _window_mean(city_metrics.co2_prefix, int(start_index), end_index)
+            water_mean = _window_mean(city_metrics.water_prefix, int(start_index), end_index)
             score, co2_component, water_component = _candidate_score(
-                metrics,
-                dc_row,
-                str(job["origin_city"]),
+                co2_mean,
+                water_mean,
+                dc_record,
+                origin_city,
                 alpha,
                 beta,
                 gamma,
             )
-            candidate = ScheduleCandidate(
-                dc_id=str(dc_row["dc_id"]),
-                city=city,
-                start_time=start_time,
-                end_time=hours[-1] + pd.Timedelta(hours=1),
-                score=score,
-                expected_co2_kg=required_power * co2_component * duration_hours,
-                expected_water_liters=required_power * water_component * duration_hours,
+            start_time = pd.Timestamp(prepared_state.time_index[int(start_index)])
+            end_time = pd.Timestamp(prepared_state.time_index[end_index - 1]) + pd.Timedelta(hours=1)
+            candidates.append(
+                ScheduleCandidate(
+                    dc_id=dc_id,
+                    city=city,
+                    start_time=start_time,
+                    end_time=end_time,
+                    score=score,
+                    expected_co2_kg=required_power * co2_component * duration_hours,
+                    expected_water_liters=required_power * water_component * duration_hours,
+                    start_index=int(start_index),
+                    end_index=end_index,
+                )
             )
-            candidates.append(candidate)
 
     return sorted(candidates, key=lambda candidate: candidate.score)
 
 
 def _find_best_assignment(
     job: pd.Series,
-    dc_df: pd.DataFrame,
-    env_lookup: dict[str, pd.DataFrame],
-    time_index: pd.DatetimeIndex,
-    used_capacity: dict[tuple[str, pd.Timestamp], float],
+    prepared_state: PreparedSchedulerState,
+    used_capacity: dict[str, np.ndarray],
     alpha: float,
     beta: float,
     gamma: float,
 ) -> ScheduleCandidate | None:
     candidates = _enumerate_candidates(
         job=job,
-        dc_df=dc_df,
-        env_lookup=env_lookup,
-        time_index=time_index,
+        prepared_state=prepared_state,
         used_capacity=used_capacity,
         alpha=alpha,
         beta=beta,
@@ -343,16 +453,14 @@ def list_job_candidates(
     alpha: float = 1.0,
     beta: float = 1.0,
     gamma: float = 0.05,
+    prepared_state: PreparedSchedulerState | None = None,
 ) -> pd.DataFrame:
     """Return all feasible routing options for a single job."""
-    env_lookup = _build_environment_lookup(env_df)
-    time_index = pd.DatetimeIndex(sorted(env_df["timestamp"].unique()))
+    state = prepared_state or prepare_scheduler_state(env_df, dc_df)
     candidates = _enumerate_candidates(
         job=job,
-        dc_df=dc_df,
-        env_lookup=env_lookup,
-        time_index=time_index,
-        used_capacity={},
+        prepared_state=state,
+        used_capacity=_initialize_capacity_state(state),
         alpha=alpha,
         beta=beta,
         gamma=gamma,
@@ -383,11 +491,14 @@ def schedule_jobs(
     alpha: float = 1.0,
     beta: float = 1.0,
     gamma: float = 0.05,
+    prepared_state: PreparedSchedulerState | None = None,
 ) -> pd.DataFrame:
     """Greedy multi-objective scheduler with hourly capacity constraints."""
-    env_lookup = _build_environment_lookup(env_df)
-    time_index = pd.DatetimeIndex(sorted(env_df["timestamp"].unique()))
-    used_capacity: dict[tuple[str, pd.Timestamp], float] = {}
+    if jobs_df.empty:
+        return jobs_df.copy()
+
+    state = prepared_state or prepare_scheduler_state(env_df, dc_df)
+    used_capacity = _initialize_capacity_state(state)
 
     jobs = jobs_df.copy()
     jobs["priority_sort"] = jobs["priority"].fillna(1)
@@ -397,9 +508,7 @@ def schedule_jobs(
     for _, job in jobs.iterrows():
         assignment = _find_best_assignment(
             job,
-            dc_df,
-            env_lookup,
-            time_index,
+            state,
             used_capacity,
             alpha,
             beta,
@@ -422,15 +531,11 @@ def schedule_jobs(
             )
             continue
 
-        hours = pd.date_range(
-            start=assignment.start_time,
-            end=assignment.end_time - pd.Timedelta(hours=1),
-            freq="h",
-        )
         _reserve_capacity(
             used_capacity,
             assignment.dc_id,
-            hours,
+            assignment.start_index,
+            assignment.end_index,
             float(job["power_demand"]),
         )
         scheduled_rows.append(
@@ -454,10 +559,19 @@ def schedule_jobs_naive(
     env_df: pd.DataFrame,
     jobs_df: pd.DataFrame,
     dc_df: pd.DataFrame,
+    prepared_state: PreparedSchedulerState | None = None,
 ) -> pd.DataFrame:
     """Naive baseline: prefer same-city placement, otherwise first feasible DC."""
     naive_dc = dc_df.copy()
-    return schedule_jobs(env_df, jobs_df, naive_dc, alpha=0.0, beta=0.0, gamma=0.20)
+    return schedule_jobs(
+        env_df,
+        jobs_df,
+        naive_dc,
+        alpha=0.0,
+        beta=0.0,
+        gamma=0.20,
+        prepared_state=prepared_state,
+    )
 
 
 def summarize_schedule(schedule_df: pd.DataFrame) -> dict[str, float]:
@@ -491,6 +605,8 @@ def compare_summaries(
             baseline["total_expected_water_liters"],
             optimized["total_expected_water_liters"],
         ),
+        "coverage_delta_pct": (optimized["coverage"] - baseline["coverage"]) * 100.0,
+        "scheduled_jobs_delta": optimized["scheduled_jobs"] - baseline["scheduled_jobs"],
     }
 
 
@@ -513,6 +629,7 @@ def run_scheduling_pipeline(
     dc_df = load_dc_config(dc_config_path)
     data_df = load_dataset(data_path)
     env_df = prepare_environment_frame(data_df, city_subset=dc_df["city"].unique().tolist())
+    prepared_state = prepare_scheduler_state(env_df, dc_df)
 
     optimized_schedule = schedule_jobs(
         env_df,
@@ -521,8 +638,9 @@ def run_scheduling_pipeline(
         alpha=alpha,
         beta=beta,
         gamma=gamma,
+        prepared_state=prepared_state,
     )
-    baseline_schedule = schedule_jobs_naive(env_df, jobs_df, dc_df)
+    baseline_schedule = schedule_jobs_naive(env_df, jobs_df, dc_df, prepared_state=prepared_state)
 
     optimized_summary = summarize_schedule(optimized_schedule)
     baseline_summary = summarize_schedule(baseline_schedule)

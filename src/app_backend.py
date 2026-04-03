@@ -17,6 +17,7 @@ try:
         list_job_candidates,
         load_dc_config,
         load_jobs_dataset,
+        prepare_scheduler_state,
         prepare_environment_frame,
         schedule_jobs,
         schedule_jobs_naive,
@@ -32,6 +33,7 @@ except ImportError:
         list_job_candidates,
         load_dc_config,
         load_jobs_dataset,
+        prepare_scheduler_state,
         prepare_environment_frame,
         schedule_jobs,
         schedule_jobs_naive,
@@ -78,6 +80,17 @@ class SchedulerInputs:
     gamma: float
     start_time: pd.Timestamp
     top_k: int = 4
+
+
+@dataclass(frozen=True)
+class BatchSchedulerInputs:
+    priority: str
+    latency_sensitivity: float
+    alpha: float
+    beta: float
+    gamma: float
+    start_time: pd.Timestamp
+    batch_size: int = 100
 
 
 @dataclass(frozen=True)
@@ -184,6 +197,9 @@ class SustainabilitySchedulingBackend:
             "default_scheduler_timestamp": self.default_scheduler_timestamp().to_pydatetime(),
             "default_workload_size": round(power_median, 2),
             "default_duration_hours": max(1, int(round(duration_median))),
+            "default_batch_size": 100,
+            "batch_size_min": 50,
+            "batch_size_max": 200,
             "priority_counts": {str(key): int(value) for key, value in priority_counts.items()},
         }
 
@@ -442,6 +458,327 @@ class SustainabilitySchedulingBackend:
         enriched["latency"] = latency_ms
 
         return enriched
+
+    @staticmethod
+    def _batch_profile(priority: str) -> dict[str, int]:
+        profiles = {
+            "high": {"spread_hours": 4, "max_duration": 8, "max_slack": 2},
+            "medium": {"spread_hours": 8, "max_duration": 12, "max_slack": 4},
+            "low": {"spread_hours": 12, "max_duration": 16, "max_slack": 6},
+        }
+        return profiles.get(priority.lower(), profiles["medium"])
+
+    def _build_batch_jobs(
+        self,
+        start_time: pd.Timestamp,
+        batch_size: int,
+        priority: str,
+    ) -> pd.DataFrame:
+        jobs = self.jobs_df.copy()
+        if jobs.empty:
+            return jobs
+
+        profile = self._batch_profile(priority)
+        sample_size = max(1, min(len(jobs), int(batch_size)))
+        batch = (
+            jobs.sort_values(["earliest_start", "job_id"])
+            .head(sample_size)
+            .reset_index(drop=True)
+            .copy()
+        )
+
+        original_earliest = batch["earliest_start"].copy()
+        original_slack = (
+            (batch["deadline"] - batch["earliest_start"]).dt.total_seconds() / 3600.0
+            - pd.to_numeric(batch["duration_hours"], errors="coerce")
+        ).clip(lower=1)
+
+        offset_hours = (
+            (original_earliest.dt.floor("h") - original_earliest.min().floor("h"))
+            .dt.total_seconds()
+            .div(3600.0)
+            .fillna(0)
+            .astype(int)
+        )
+        batch["earliest_start"] = pd.Timestamp(start_time).floor("h") + pd.to_timedelta(
+            offset_hours.mod(profile["spread_hours"]),
+            unit="h",
+        )
+
+        duration_rank = pd.to_numeric(batch["duration_hours"], errors="coerce").rank(
+            method="average",
+            pct=True,
+        )
+        batch["duration_hours"] = (
+            (duration_rank.fillna(0.5) * profile["max_duration"])
+            .clip(lower=1, upper=profile["max_duration"])
+            .round()
+            .astype(int)
+        )
+
+        slack_rank = original_slack.rank(method="average", pct=True)
+        slack_hours = (
+            (slack_rank.fillna(0.5) * profile["max_slack"])
+            .clip(lower=1, upper=profile["max_slack"])
+            .round()
+            .astype(int)
+        )
+        batch["deadline"] = batch["earliest_start"] + pd.to_timedelta(
+            batch["duration_hours"] + slack_hours,
+            unit="h",
+        )
+
+        priority_code = PRIORITY_TO_CODE.get(priority.lower(), 1)
+        batch["priority"] = priority_code
+        batch["priority_label"] = priority.lower()
+        return batch
+
+    def _attach_schedule_coordinates(self, schedule_df: pd.DataFrame) -> pd.DataFrame:
+        if schedule_df.empty:
+            return schedule_df.copy()
+
+        coords = self.coords_df[["city", "latitude", "longitude"]].copy()
+        origin = coords.rename(
+            columns={
+                "city": "origin_city",
+                "latitude": "origin_latitude",
+                "longitude": "origin_longitude",
+            }
+        )
+        destination = coords.rename(
+            columns={
+                "city": "assigned_city",
+                "latitude": "destination_latitude",
+                "longitude": "destination_longitude",
+            }
+        )
+        enriched = schedule_df.merge(origin, on="origin_city", how="left").merge(
+            destination,
+            on="assigned_city",
+            how="left",
+        )
+        enriched = enriched.dropna(
+            subset=["origin_latitude", "origin_longitude", "destination_latitude", "destination_longitude"]
+        ).copy()
+        latency_ms: list[float] = []
+        for _, row in enriched.iterrows():
+            latency_ms.append(
+                5.0
+                + (
+                    self._haversine_km(
+                        float(row["origin_latitude"]),
+                        float(row["origin_longitude"]),
+                        float(row["destination_latitude"]),
+                        float(row["destination_longitude"]),
+                    )
+                    / 200.0
+                )
+            )
+        enriched["latency_ms"] = latency_ms
+        return enriched
+
+    def _aggregate_schedule_flows(
+        self,
+        schedule_df: pd.DataFrame,
+        scenario: str,
+    ) -> list[dict[str, Any]]:
+        if schedule_df.empty:
+            return []
+
+        scheduled = self._attach_schedule_coordinates(schedule_df[schedule_df["scheduled"] == 1].copy())
+        if scheduled.empty:
+            return []
+
+        flows = (
+            scheduled.groupby(
+                [
+                    "origin_city",
+                    "assigned_city",
+                    "origin_latitude",
+                    "origin_longitude",
+                    "destination_latitude",
+                    "destination_longitude",
+                ],
+                as_index=False,
+            )
+            .agg(
+                jobs=("job_id", "count"),
+                total_co2_kg=("expected_co2_kg", "sum"),
+                total_water_liters=("expected_water_liters", "sum"),
+                avg_scheduler_score=("scheduler_score", "mean"),
+                avg_latency_ms=("latency_ms", "mean"),
+            )
+            .sort_values(["jobs", "total_co2_kg"], ascending=[False, False])
+            .reset_index(drop=True)
+        )
+        outputs: list[dict[str, Any]] = []
+        for index, row in flows.iterrows():
+            route = f"{row['origin_city']} -> {row['assigned_city']}"
+            outputs.append(
+                {
+                    "flow_id": f"{scenario}:{index}:{row['origin_city']}:{row['assigned_city']}",
+                    "route": route,
+                    "origin_city": str(row["origin_city"]),
+                    "assigned_city": str(row["assigned_city"]),
+                    "origin_latitude": float(row["origin_latitude"]),
+                    "origin_longitude": float(row["origin_longitude"]),
+                    "destination_latitude": float(row["destination_latitude"]),
+                    "destination_longitude": float(row["destination_longitude"]),
+                    "jobs": int(row["jobs"]),
+                    "co2": float(row["total_co2_kg"]),
+                    "water_liters": float(row["total_water_liters"]),
+                    "latency": float(row["avg_latency_ms"]),
+                    "score": float(row["avg_scheduler_score"]),
+                    "scenario": scenario,
+                }
+            )
+        return outputs
+
+    @staticmethod
+    def _weighted_average_latency(flows: list[dict[str, Any]]) -> float:
+        if not flows:
+            return 0.0
+        total_jobs = sum(int(flow.get("jobs", 0)) for flow in flows)
+        if total_jobs <= 0:
+            return 0.0
+        weighted_latency = sum(
+            float(flow.get("latency", 0.0)) * int(flow.get("jobs", 0))
+            for flow in flows
+        )
+        return weighted_latency / total_jobs
+
+    def build_batch_story(
+        self,
+        comparison: dict[str, float],
+        optimized_flows: list[dict[str, Any]],
+        baseline_flows: list[dict[str, Any]],
+        batch_size: int,
+    ) -> dict[str, str]:
+        busiest_flow = optimized_flows[0] if optimized_flows else None
+        if busiest_flow is None:
+            return {
+                "title": "No feasible batch schedule",
+                "summary": "The current batch setup could not place any jobs inside the selected simulation window.",
+            }
+
+        baseline_latency = self._weighted_average_latency(baseline_flows)
+        optimized_latency = self._weighted_average_latency(optimized_flows)
+        latency_delta = optimized_latency - baseline_latency
+        destination = busiest_flow["assigned_city"]
+        summary = (
+            f"The optimized batch sends the heaviest traffic toward {destination}, where the system finds a better "
+            f"carbon and water profile for this {batch_size}-job window. Compared with the baseline schedule, "
+            f"the batch changes CO2 by {float(comparison.get('co2_reduction_pct', 0.0)):+.1f}% and water by "
+            f"{float(comparison.get('water_reduction_pct', 0.0)):+.1f}%, while average route latency moves "
+            f"{latency_delta:+.1f} ms."
+        )
+        return {
+            "title": f"Why {destination} absorbs the busiest flow",
+            "summary": summary,
+        }
+
+    def run_batch_scheduler(self, inputs: BatchSchedulerInputs) -> dict[str, Any]:
+        start_time = pd.Timestamp(inputs.start_time).floor("h")
+        end_time = start_time + pd.Timedelta(hours=INTERACTIVE_HORIZON_HOURS)
+        env_window = self._filter_environment_window(self.env_df, start_time, end_time)
+        if env_window.empty:
+            return {
+                "time": start_time.isoformat(),
+                "batch_size": int(inputs.batch_size),
+                "priority": inputs.priority,
+                "window_end": end_time.isoformat(),
+                "nodes": [],
+                "optimized_flows": [],
+                "baseline_flows": [],
+                "selected_flow": None,
+                "optimized_summary": {
+                    "scheduled_jobs": 0.0,
+                    "total_jobs": float(inputs.batch_size),
+                    "coverage": 0.0,
+                    "total_expected_co2_kg": 0.0,
+                    "total_expected_water_liters": 0.0,
+                    "avg_latency_ms": 0.0,
+                },
+                "baseline_summary": {
+                    "scheduled_jobs": 0.0,
+                    "total_jobs": float(inputs.batch_size),
+                    "coverage": 0.0,
+                    "total_expected_co2_kg": 0.0,
+                    "total_expected_water_liters": 0.0,
+                    "avg_latency_ms": 0.0,
+                },
+                "comparison": {
+                    "co2_reduction_pct": 0.0,
+                    "water_reduction_pct": 0.0,
+                    "coverage_delta_pct": 0.0,
+                    "scheduled_jobs_delta": 0.0,
+                    "latency_delta_ms": 0.0,
+                },
+                "insight": self.build_batch_story(
+                    {
+                        "co2_reduction_pct": 0.0,
+                        "water_reduction_pct": 0.0,
+                        "latency_delta_ms": 0.0,
+                    },
+                    [],
+                    [],
+                    int(inputs.batch_size),
+                ),
+            }
+
+        jobs_window = self._build_batch_jobs(start_time, inputs.batch_size, inputs.priority)
+        prepared_state = prepare_scheduler_state(env_window, self.dc_df)
+        optimized = schedule_jobs(
+            env_window,
+            jobs_window,
+            self.dc_df,
+            alpha=float(inputs.alpha),
+            beta=float(inputs.beta),
+            gamma=float(inputs.gamma) * float(inputs.latency_sensitivity),
+            prepared_state=prepared_state,
+        )
+        baseline = schedule_jobs_naive(
+            env_window,
+            jobs_window,
+            self.dc_df,
+            prepared_state=prepared_state,
+        )
+
+        optimized_flows = self._aggregate_schedule_flows(optimized, scenario="optimized")
+        baseline_flows = self._aggregate_schedule_flows(baseline, scenario="baseline")
+        optimized_summary = summarize_schedule(optimized)
+        baseline_summary = summarize_schedule(baseline)
+        optimized_summary["avg_latency_ms"] = self._weighted_average_latency(optimized_flows)
+        baseline_summary["avg_latency_ms"] = self._weighted_average_latency(baseline_flows)
+
+        comparison = compare_summaries(baseline_summary, optimized_summary)
+        comparison["latency_delta_ms"] = (
+            float(optimized_summary["avg_latency_ms"]) - float(baseline_summary["avg_latency_ms"])
+        )
+
+        nodes = self._build_node_frame(env_window)
+        selected_flow = optimized_flows[0] if optimized_flows else None
+        insight = self.build_batch_story(
+            comparison,
+            optimized_flows,
+            baseline_flows,
+            int(inputs.batch_size),
+        )
+
+        return {
+            "time": start_time.isoformat(),
+            "window_end": end_time.isoformat(),
+            "batch_size": int(inputs.batch_size),
+            "priority": inputs.priority,
+            "nodes": nodes.fillna("").to_dict(orient="records"),
+            "optimized_flows": optimized_flows,
+            "baseline_flows": baseline_flows,
+            "selected_flow": selected_flow,
+            "optimized_summary": optimized_summary,
+            "baseline_summary": baseline_summary,
+            "comparison": comparison,
+            "insight": insight,
+        }
 
     def run_scheduler(self, inputs: SchedulerInputs) -> list[dict[str, Any]]:
         start_time = pd.Timestamp(inputs.start_time).floor("h")

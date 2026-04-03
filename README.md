@@ -246,10 +246,11 @@ Open the local Vite URL, usually:
 
 The React interface provides:
 
-- a large interactive map with node coloring for CO2 and sizing for WUE
-- routing paths for low-carbon, low-water, balanced, and low-latency options
-- a compact control panel for priority, weights, and simulation time
-- an insight panel explaining the recommended route and its impact vs baseline
+- a large interactive U.S. map with node coloring for CO2 and sizing for WUE
+- a single-job mode for low-carbon, low-water, balanced, and low-latency route options
+- a batch mode for 50-200 jobs with aggregated flow bands and baseline overlays
+- a compact control panel for priority, weights, time, and batch size
+- an insight panel explaining either the recommended route or the optimized batch behavior
 
 The repository now exposes the scheduling simulation through FastAPI and ships a
 React frontend for local visualization and demos.
@@ -259,8 +260,9 @@ Core API endpoints:
 - `GET /health`
 - `GET /context`
 - `POST /simulate`
+- `POST /simulate-batch`
 
-The external visualization layer can call `POST /simulate` with:
+Single-job clients can call `POST /simulate` with:
 
 - `priority`
 - `alpha`
@@ -268,6 +270,18 @@ The external visualization layer can call `POST /simulate` with:
 - `gamma`
 - `time`
 - `latency_sensitivity`
+- `workload_size`
+- `origin_city`
+
+Batch clients can call `POST /simulate-batch` with:
+
+- `priority`
+- `alpha`
+- `beta`
+- `gamma`
+- `time`
+- `latency_sensitivity`
+- `batch_size`
 - `workload_size`
 - `origin_city`
 
