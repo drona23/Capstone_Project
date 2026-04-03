@@ -18,11 +18,11 @@ DEFAULT_CITY_POOL = [
     "Ashburn",
     "Atlanta",
     "Austin",
+    "Baltimore",
+    "Boston",
+    "Charlotte",
     "Chicago",
     "Dallas",
-    "Phoenix",
-    "Portland",
-    "Seattle",
 ]
 
 
@@ -94,7 +94,7 @@ def _map_city_from_tenant(series: pd.Series, city_pool: list[str]) -> pd.Series:
 
 def build_jobs_from_azure_trace(
     trace_df: pd.DataFrame,
-    start_datetime: str = "2025-01-01 00:00:00",
+    start_datetime: str = "2019-01-01 00:00:00",
     city_pool: list[str] | None = None,
     power_scale: float = 100.0,
     slack_hours: int = 6,
@@ -111,8 +111,12 @@ def build_jobs_from_azure_trace(
     normalized_start_days = jobs["starttime"] - start_reference
     normalized_end_days = jobs["endtime"] - start_reference
     anchor = pd.Timestamp(start_datetime)
-    jobs["earliest_start"] = anchor + pd.to_timedelta(normalized_start_days, unit="D")
-    jobs["end_timestamp"] = anchor + pd.to_timedelta(normalized_end_days, unit="D")
+    jobs["earliest_start"] = (
+        anchor + pd.to_timedelta(normalized_start_days, unit="D")
+    ).dt.floor("h")
+    jobs["end_timestamp"] = (
+        anchor + pd.to_timedelta(normalized_end_days, unit="D")
+    ).dt.ceil("h")
 
     duration_hours = (
         (jobs["end_timestamp"] - jobs["earliest_start"]).dt.total_seconds() / 3600.0
@@ -153,10 +157,11 @@ def export_jobs_from_azure_trace(
     input_path: str | Path | None,
     output_path: str | Path,
     limit: int | None = None,
+    start_datetime: str = "2019-01-01 00:00:00",
 ) -> Path:
     """Load Azure trace rows, convert them to jobs, and save a CSV."""
     trace_df = load_azure_vm_trace(input_path, limit=limit)
-    jobs_df = build_jobs_from_azure_trace(trace_df)
+    jobs_df = build_jobs_from_azure_trace(trace_df, start_datetime=start_datetime)
 
     destination = Path(output_path)
     if not destination.is_absolute():
@@ -186,6 +191,11 @@ def parse_args() -> argparse.Namespace:
         default=5000,
         help="Optional number of completed VM rows to convert.",
     )
+    parser.add_argument(
+        "--start-datetime",
+        default="2019-01-01 00:00:00",
+        help="Anchor datetime for mapping relative Azure trace times into hourly scheduler timestamps.",
+    )
     return parser.parse_args()
 
 
@@ -195,6 +205,7 @@ def main() -> None:
         input_path=args.input_path,
         output_path=args.output_path,
         limit=args.limit,
+        start_datetime=args.start_datetime,
     )
     print(f"Wrote jobs dataset to {output_path}")
 

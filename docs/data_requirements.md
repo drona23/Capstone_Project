@@ -138,7 +138,7 @@ The best next step is:
 
 1. Use `base_data_with_metrics.parquet` as the primary training dataset.
 2. Use the Azure packing trace as the first workload trace source for scheduling.
-3. Create a small synthetic or estimated data-center configuration table.
+3. Use the starter template in `data/templates/dc_config_template.csv` and then refine it with better capacity and efficiency assumptions.
 4. Only after that, operationalize the scheduling notebook into the main codebase.
 
 ## What We Do Not Strictly Need Right Now

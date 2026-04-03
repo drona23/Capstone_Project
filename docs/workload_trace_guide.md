@@ -71,7 +71,8 @@ Example:
 python3 -m src.workload_loader \
   --input-path data/external/azure_packing/packing_trace_zone_a_v1.sqlite \
   --output-path data/processed/azure_jobs_sample.csv \
-  --limit 5000
+  --limit 5000 \
+  --start-datetime "2019-01-01 00:00:00"
 ```
 
 ## Important Limitations

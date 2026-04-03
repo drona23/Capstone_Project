@@ -153,7 +153,28 @@ Optional example using the downloaded master archive directly:
 python3 -m src.main --data-path "/Users/drona23/Downloads/Archive 3.zip"
 ```
 
-### 4. Explore the Notebook
+### 4. Build Workload Jobs from the Azure Trace
+
+```bash
+python3 -m src.workload_loader \
+  --input-path data/external/azure_packing/packing_trace_zone_a_v1.sqlite \
+  --output-path data/processed/azure_jobs_sample.csv \
+  --limit 5000 \
+  --start-datetime "2019-01-01 00:00:00"
+```
+
+### 5. Run the Scheduling Pipeline
+
+```bash
+python3 -m src.scheduling \
+  --data-path "/Users/drona23/Downloads/Archive 3.zip" \
+  --jobs-path data/processed/azure_jobs_sample.csv \
+  --dc-config-path data/templates/dc_config_template.csv \
+  --job-limit 100 \
+  --output-path data/processed/schedule_results.csv
+```
+
+### 6. Explore the Notebook
 
 The exploratory analysis notebook is located at:
 
@@ -175,10 +196,14 @@ Capstone_Research/
 │   ├── data_loader.py
 │   ├── preprocessing.py
 │   ├── main.py
+│   ├── scheduling.py
 │   ├── train.py
 │   ├── evaluate.py
 │   ├── weather_loader.py
 │   └── workload_loader.py
+├── data/
+│   └── templates/
+│       └── dc_config_template.csv
 ├── docs/
 │   ├── data_requirements.md
 │   └── workload_trace_guide.md
@@ -211,3 +236,7 @@ For the exact list of remaining data gaps and source links, see
 
 For the recommended public workload trace and conversion workflow, see
 [docs/workload_trace_guide.md](docs/workload_trace_guide.md).
+
+For the first runnable scheduler and the starter data-center configuration
+template, use [src/scheduling.py](src/scheduling.py) and
+[data/templates/dc_config_template.csv](data/templates/dc_config_template.csv).

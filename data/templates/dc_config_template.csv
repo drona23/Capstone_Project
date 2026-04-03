@@ -1,0 +1,9 @@
+dc_id,city,max_power_per_hour,pue,water_usage_factor,region_water_scarcity,is_new
+dc_ashburn_1,Ashburn,550,1.12,0.90,0.52,1
+dc_atlanta_1,Atlanta,500,1.18,1.00,0.61,1
+dc_austin_1,Austin,520,1.20,1.05,0.72,0
+dc_baltimore_1,Baltimore,460,1.16,0.95,0.55,1
+dc_boston_1,Boston,430,1.14,0.92,0.48,1
+dc_charlotte_1,Charlotte,470,1.17,0.97,0.58,1
+dc_chicago_1,Chicago,540,1.19,1.00,0.50,0
+dc_dallas_1,Dallas,600,1.22,1.08,0.74,0
