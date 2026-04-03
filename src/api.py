@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .app_backend import SchedulerInputs, SustainabilitySchedulingBackend, resolve_default_paths
@@ -26,6 +27,14 @@ app = FastAPI(
     title="Sustainability-Aware Scheduling API",
     version="1.0.0",
     description="Simulation API for interactive workload routing demonstrations.",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 

@@ -144,6 +144,14 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+For the React visualization:
+
+```bash
+cd frontend
+npm install
+cd ..
+```
+
 ### 2. Add the Dataset
 
 Place the dataset file at:
@@ -223,8 +231,28 @@ and feature relationships before formal model training.
 python3 -m uvicorn src.api:app --reload
 ```
 
-The repository now exposes the scheduling simulation through FastAPI rather than
-shipping a built-in Streamlit interface.
+### 8. Launch the React Visualization
+
+In a second terminal:
+
+```bash
+cd frontend
+npm run dev
+```
+
+Open the local Vite URL, usually:
+
+- `http://127.0.0.1:5173`
+
+The React interface provides:
+
+- a large interactive map with node coloring for CO2 and sizing for WUE
+- routing paths for low-carbon, low-water, balanced, and low-latency options
+- a compact control panel for priority, weights, and simulation time
+- an insight panel explaining the recommended route and its impact vs baseline
+
+The repository now exposes the scheduling simulation through FastAPI and ships a
+React frontend for local visualization and demos.
 
 Core API endpoints:
 
@@ -265,6 +293,10 @@ Capstone_Research/
 │   └── prophet_models/
 ├── notebooks/
 │   └── eda.ipynb
+├── frontend/
+│   ├── src/
+│   ├── package.json
+│   └── vite.config.ts
 ├── src/
 │   ├── __init__.py
 │   ├── app_backend.py

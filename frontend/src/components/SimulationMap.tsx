@@ -1,0 +1,395 @@
+import { useEffect, useMemo, useRef } from 'react'
+import type { Feature, FeatureCollection, LineString, Point } from 'geojson'
+import maplibregl, { LngLatBounds, type Map as MapLibreMap, type Popup } from 'maplibre-gl'
+import 'maplibre-gl/dist/maplibre-gl.css'
+
+import type { CompareMode, PathCandidate, PathType, SimulationNode } from '../lib/types'
+
+const MAP_STYLE_URL = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
+const NODE_SOURCE_ID = 'simulation-nodes'
+const PATH_SOURCE_ID = 'simulation-paths'
+const NODE_LAYER_ID = 'simulation-node-circles'
+const PATH_LAYER_ID = 'simulation-path-lines'
+
+const PATH_TYPE_COLORS: Record<PathType, string> = {
+  balanced: '#d39d1a',
+  low_carbon: '#2f9e63',
+  low_water: '#2f6fe4',
+  low_latency: '#cf2f2f',
+  baseline: '#677282',
+}
+
+const PATH_TYPE_LABELS: Record<PathType, string> = {
+  balanced: 'Balanced',
+  low_carbon: 'Low Carbon',
+  low_water: 'Low Water',
+  low_latency: 'Low Latency',
+  baseline: 'Baseline',
+}
+
+type NodeProperties = {
+  city: string
+  state?: string
+  avg_co2_intensity: number
+  avg_wue: number
+  avg_scarcity: number
+  records: number
+  has_data_center: number
+}
+
+type PathProperties = {
+  route: string
+  type: PathType
+  typeLabel: string
+  co2: number
+  wue: number
+  latency: number
+  score: number
+  lineColor: string
+  lineWidth: number
+  arrow: string
+}
+
+interface SimulationMapProps {
+  nodes: SimulationNode[]
+  paths: PathCandidate[]
+  selectedPathType: PathType | null
+  compareMode: CompareMode
+  recommendedPath: PathCandidate | null
+  baselinePath: PathCandidate | null
+}
+
+function buildNodeCollection(nodes: SimulationNode[]): FeatureCollection<Point, NodeProperties> {
+  return {
+    type: 'FeatureCollection',
+    features: nodes.map<Feature<Point, NodeProperties>>((node) => ({
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: [node.longitude, node.latitude],
+      },
+      properties: {
+        city: node.city,
+        state: node.state,
+        avg_co2_intensity: node.avg_co2_intensity,
+        avg_wue: node.avg_wue,
+        avg_scarcity: node.avg_scarcity,
+        records: node.records,
+        has_data_center: node.has_data_center,
+      },
+    })),
+  }
+}
+
+function buildDisplayedPaths(
+  compareMode: CompareMode,
+  paths: PathCandidate[],
+  recommendedPath: PathCandidate | null,
+  baselinePath: PathCandidate | null,
+): PathCandidate[] {
+  if (compareMode === 'baseline') {
+    return [baselinePath, recommendedPath].filter((path): path is PathCandidate => Boolean(path))
+  }
+  return paths
+}
+
+function buildPathCollection(
+  paths: PathCandidate[],
+  selectedPathType: PathType | null,
+): FeatureCollection<LineString, PathProperties> {
+  return {
+    type: 'FeatureCollection',
+    features: paths.map<Feature<LineString, PathProperties>>((path) => {
+      const isHighlighted = selectedPathType === null || selectedPathType === path.type
+      return {
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: [
+            [path.origin_longitude, path.origin_latitude],
+            [path.destination_longitude, path.destination_latitude],
+          ],
+        },
+        properties: {
+          route: path.route,
+          type: path.type,
+          typeLabel: PATH_TYPE_LABELS[path.type],
+          co2: path.co2,
+          wue: path.wue,
+          latency: path.latency,
+          score: path.score,
+          lineColor: PATH_TYPE_COLORS[path.type],
+          lineWidth: isHighlighted ? 6.5 : 3.5,
+          arrow: '▶',
+        },
+      }
+    }),
+  }
+}
+
+function extent(values: number[]): [number, number] {
+  if (values.length === 0) {
+    return [0, 1]
+  }
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  return min === max ? [min, min + 1] : [min, max]
+}
+
+function nodePopupHtml(properties: NodeProperties): string {
+  return `
+    <div class="map-popup">
+      <div class="map-popup__title">${properties.city}</div>
+      <div>CO2 intensity: ${properties.avg_co2_intensity.toFixed(3)} kg/kWh</div>
+      <div>WUE: ${properties.avg_wue.toFixed(3)} L/kWh</div>
+      <div>Scarcity: ${properties.avg_scarcity.toFixed(3)}</div>
+    </div>
+  `
+}
+
+function pathPopupHtml(properties: PathProperties): string {
+  return `
+    <div class="map-popup">
+      <div class="map-popup__title">${properties.route}</div>
+      <div>${properties.typeLabel} route</div>
+      <div>CO2: ${properties.co2.toFixed(2)} kg</div>
+      <div>WUE: ${properties.wue.toFixed(3)} L/kWh</div>
+      <div>Latency: ${properties.latency.toFixed(1)} ms</div>
+    </div>
+  `
+}
+
+export function SimulationMap({
+  nodes,
+  paths,
+  selectedPathType,
+  compareMode,
+  recommendedPath,
+  baselinePath,
+}: SimulationMapProps) {
+  const mapContainerRef = useRef<HTMLDivElement | null>(null)
+  const mapRef = useRef<MapLibreMap | null>(null)
+  const popupRef = useRef<Popup | null>(null)
+  const hasFittedRef = useRef(false)
+
+  const displayedPaths = useMemo(
+    () => buildDisplayedPaths(compareMode, paths, recommendedPath, baselinePath),
+    [baselinePath, compareMode, paths, recommendedPath],
+  )
+  const nodeCollection = useMemo(() => buildNodeCollection(nodes), [nodes])
+  const pathCollection = useMemo(
+    () => buildPathCollection(displayedPaths, selectedPathType),
+    [displayedPaths, selectedPathType],
+  )
+
+  useEffect(() => {
+    if (!mapContainerRef.current || mapRef.current) {
+      return
+    }
+
+    const map = new maplibregl.Map({
+      container: mapContainerRef.current,
+      style: MAP_STYLE_URL,
+      center: [-96.5, 39.5],
+      zoom: 3.35,
+      attributionControl: false,
+    })
+
+    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right')
+    const popup = new maplibregl.Popup({
+      closeButton: false,
+      closeOnClick: false,
+      offset: 18,
+      className: 'simulation-map-popup',
+    })
+
+    mapRef.current = map
+    popupRef.current = popup
+
+    map.on('load', () => {
+      map.addSource(NODE_SOURCE_ID, {
+        type: 'geojson',
+        data: nodeCollection,
+      })
+      map.addSource(PATH_SOURCE_ID, {
+        type: 'geojson',
+        data: pathCollection,
+      })
+
+      map.addLayer({
+        id: 'simulation-scarcity-heat',
+        type: 'heatmap',
+        source: NODE_SOURCE_ID,
+        paint: {
+          'heatmap-weight': ['coalesce', ['get', 'avg_scarcity'], 0],
+          'heatmap-intensity': 0.7,
+          'heatmap-radius': 38,
+          'heatmap-opacity': 0.38,
+          'heatmap-color': [
+            'interpolate',
+            ['linear'],
+            ['heatmap-density'],
+            0,
+            'rgba(227, 242, 235, 0)',
+            0.4,
+            'rgba(208, 230, 201, 0.45)',
+            1,
+            'rgba(112, 177, 116, 0.75)',
+          ],
+        },
+      })
+
+      map.addLayer({
+        id: PATH_LAYER_ID,
+        type: 'line',
+        source: PATH_SOURCE_ID,
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+        },
+        paint: {
+          'line-color': ['to-color', ['get', 'lineColor']],
+          'line-width': ['coalesce', ['get', 'lineWidth'], 4],
+          'line-opacity': 0.95,
+        },
+      })
+
+      map.addLayer({
+        id: 'simulation-path-arrows',
+        type: 'symbol',
+        source: PATH_SOURCE_ID,
+        layout: {
+          'symbol-placement': 'line',
+          'symbol-spacing': 110,
+          'text-field': ['get', 'arrow'],
+          'text-size': 14,
+          'text-keep-upright': false,
+        },
+        paint: {
+          'text-color': ['to-color', ['get', 'lineColor']],
+          'text-opacity': 0.92,
+        },
+      })
+
+      map.addLayer({
+        id: NODE_LAYER_ID,
+        type: 'circle',
+        source: NODE_SOURCE_ID,
+        paint: {
+          'circle-color': '#5ca86d',
+          'circle-radius': 12,
+          'circle-stroke-width': ['case', ['==', ['get', 'has_data_center'], 1], 2.5, 1.25],
+          'circle-stroke-color': [
+            'case',
+            ['==', ['get', 'has_data_center'], 1],
+            '#123c2b',
+            'rgba(255,255,255,0.85)',
+          ],
+          'circle-opacity': 0.92,
+        },
+      })
+
+      const enterLayer = () => {
+        map.getCanvas().style.cursor = 'pointer'
+      }
+      const leaveLayer = () => {
+        map.getCanvas().style.cursor = ''
+        popup.remove()
+      }
+
+      map.on('mouseenter', NODE_LAYER_ID, enterLayer)
+      map.on('mouseleave', NODE_LAYER_ID, leaveLayer)
+      map.on('mousemove', NODE_LAYER_ID, (event) => {
+        const feature = event.features?.[0]
+        if (!feature || feature.geometry.type !== 'Point') {
+          return
+        }
+        popup
+          .setLngLat((feature.geometry.coordinates as [number, number]))
+          .setHTML(nodePopupHtml(feature.properties as unknown as NodeProperties))
+          .addTo(map)
+      })
+
+      map.on('mouseenter', PATH_LAYER_ID, enterLayer)
+      map.on('mouseleave', PATH_LAYER_ID, leaveLayer)
+      map.on('mousemove', PATH_LAYER_ID, (event) => {
+        const feature = event.features?.[0]
+        if (!feature || !event.lngLat) {
+          return
+        }
+        popup
+          .setLngLat(event.lngLat)
+          .setHTML(pathPopupHtml(feature.properties as unknown as PathProperties))
+          .addTo(map)
+      })
+    })
+
+    return () => {
+      popup.remove()
+      map.remove()
+      mapRef.current = null
+      popupRef.current = null
+    }
+  }, [nodeCollection, pathCollection])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !map.isStyleLoaded()) {
+      return
+    }
+
+    const nodeSource = map.getSource(NODE_SOURCE_ID) as maplibregl.GeoJSONSource | undefined
+    const pathSource = map.getSource(PATH_SOURCE_ID) as maplibregl.GeoJSONSource | undefined
+    nodeSource?.setData(nodeCollection)
+    pathSource?.setData(pathCollection)
+
+    const [co2Min, co2Max] = extent(nodes.map((node) => node.avg_co2_intensity))
+    const [wueMin, wueMax] = extent(nodes.map((node) => node.avg_wue))
+
+    map.setPaintProperty(NODE_LAYER_ID, 'circle-color', [
+      'interpolate',
+      ['linear'],
+      ['coalesce', ['get', 'avg_co2_intensity'], co2Min],
+      co2Min,
+      '#2ca86b',
+      (co2Min + co2Max) / 2,
+      '#e7ad2e',
+      co2Max,
+      '#d44833',
+    ])
+
+    map.setPaintProperty(NODE_LAYER_ID, 'circle-radius', [
+      'interpolate',
+      ['linear'],
+      ['coalesce', ['get', 'avg_wue'], wueMin],
+      wueMin,
+      8,
+      wueMax,
+      24,
+    ])
+
+    if (nodes.length === 0) {
+      return
+    }
+
+    const bounds = new LngLatBounds()
+    nodes.forEach((node) => {
+      bounds.extend([node.longitude, node.latitude])
+    })
+    if (!bounds.isEmpty() && (!hasFittedRef.current || displayedPaths.length > 0)) {
+      map.fitBounds(bounds, {
+        padding: {
+          top: 70,
+          bottom: 70,
+          left: 70,
+          right: 70,
+        },
+        maxZoom: 5.2,
+        duration: 900,
+      })
+      hasFittedRef.current = true
+    }
+  }, [displayedPaths.length, nodeCollection, nodes, pathCollection])
+
+  return <div className="simulation-map" ref={mapContainerRef} />
+}
