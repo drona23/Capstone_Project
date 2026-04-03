@@ -20,6 +20,8 @@ data/*.parquet
 data/*.feather
 data/*.h5
 data/*.zip
+data/external/
+data/processed/
 
 # Local outputs
 models/

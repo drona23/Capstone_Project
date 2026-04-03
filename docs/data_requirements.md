@@ -53,6 +53,16 @@ Good sources:
 
 - [Google cluster-data](https://github.com/google/cluster-data)
 - [Alibaba clusterdata](https://github.com/alibaba/clusterdata)
+- [Azure Trace for Packing 2020](https://github.com/Azure/AzurePublicDataset/blob/master/AzureTracesForPacking2020.md)
+
+Recommended first choice:
+
+- Azure Trace for Packing 2020
+  - Direct download:
+    [AzurePackingTraceV1.zip](https://azurepublicdatasettraces.blob.core.windows.net/azurepublicdatasetv2/azurevmallocation_dataset2020/AzurePackingTraceV1.zip)
+  - Why:
+    it includes VM start/end times, priorities, and normalized resource sizes,
+    and the compressed download is manageable.
 
 ### 2. Data Center Inventory and Constraints
 
@@ -127,7 +137,7 @@ Good source:
 The best next step is:
 
 1. Use `base_data_with_metrics.parquet` as the primary training dataset.
-2. Add a workload trace source for scheduling.
+2. Use the Azure packing trace as the first workload trace source for scheduling.
 3. Create a small synthetic or estimated data-center configuration table.
 4. Only after that, operationalize the scheduling notebook into the main codebase.
 

@@ -177,9 +177,11 @@ Capstone_Research/
 │   ├── main.py
 │   ├── train.py
 │   ├── evaluate.py
-│   └── weather_loader.py
+│   ├── weather_loader.py
+│   └── workload_loader.py
 ├── docs/
-│   └── data_requirements.md
+│   ├── data_requirements.md
+│   └── workload_trace_guide.md
 ├── requirements.txt
 ├── .gitignore
 └── README.md
@@ -206,3 +208,6 @@ work on sustainable AI infrastructure.
 
 For the exact list of remaining data gaps and source links, see
 [docs/data_requirements.md](docs/data_requirements.md).
+
+For the recommended public workload trace and conversion workflow, see
+[docs/workload_trace_guide.md](docs/workload_trace_guide.md).
