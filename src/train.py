@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 import joblib
+from sklearn.dummy import DummyRegressor
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
@@ -19,7 +19,8 @@ except ImportError:
     from preprocessing import build_modeling_frame
 
 
-def _make_model(random_state: int = 42) -> Pipeline:
+def build_random_forest_pipeline(random_state: int = 42) -> Pipeline:
+    """Create the primary regression model pipeline."""
     return Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="median")),
@@ -33,6 +34,22 @@ def _make_model(random_state: int = 42) -> Pipeline:
             ),
         ]
     )
+
+
+def build_baseline_pipeline() -> Pipeline:
+    """Create a simple mean-prediction baseline pipeline."""
+    return Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("model", DummyRegressor(strategy="mean")),
+        ]
+    )
+
+
+def fit_regressor(model: Pipeline, X_train, y_train) -> Pipeline:
+    """Fit a regression pipeline and return it for reuse."""
+    model.fit(X_train, y_train)
+    return model
 
 
 def train_models(
@@ -53,11 +70,12 @@ def train_models(
         random_state=random_state,
     )
 
-    wue_model = _make_model(random_state=random_state)
-    carbon_model = _make_model(random_state=random_state)
-
-    wue_model.fit(X_train, y_wue_train)
-    carbon_model.fit(X_train, y_carbon_train)
+    wue_model = fit_regressor(
+        build_random_forest_pipeline(random_state=random_state), X_train, y_wue_train
+    )
+    carbon_model = fit_regressor(
+        build_random_forest_pipeline(random_state=random_state), X_train, y_carbon_train
+    )
 
     y_wue_pred = wue_model.predict(X_test)
     y_carbon_pred = carbon_model.predict(X_test)
@@ -114,4 +132,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

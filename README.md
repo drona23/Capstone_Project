@@ -59,6 +59,7 @@ standardizes dataset resolution through `data/sample_dataset.xlsx`.
 ### Modeling
 
 The training pipeline is implemented in [src/train.py](src/train.py).
+The end-to-end orchestration entrypoint is [src/main.py](src/main.py).
 
 The current baseline approach trains two separate regression models:
 
@@ -123,13 +124,13 @@ data/sample_dataset.xlsx
 ### 3. Run the Training Pipeline
 
 ```bash
-python3 -m src.train --data-path data/sample_dataset.xlsx
+python3 -m src.main --data-path data/sample_dataset.xlsx
 ```
 
 Optional example with custom settings:
 
 ```bash
-python3 -m src.train --data-path data/sample_dataset.xlsx --test-size 0.25 --random-state 7
+python3 -m src.main --data-path data/sample_dataset.xlsx --test-size 0.25 --random-state 7
 ```
 
 ### 4. Explore the Notebook
@@ -153,6 +154,7 @@ Capstone_Research/
 │   ├── __init__.py
 │   ├── data_loader.py
 │   ├── preprocessing.py
+│   ├── main.py
 │   ├── train.py
 │   └── evaluate.py
 ├── requirements.txt
