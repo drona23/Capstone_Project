@@ -46,6 +46,30 @@ class ScheduleCandidate:
     expected_water_liters: float
 
 
+def build_job_record(
+    origin_city: str,
+    power_demand: float,
+    duration_hours: int,
+    earliest_start: str | pd.Timestamp,
+    deadline: str | pd.Timestamp,
+    priority: int = 0,
+    job_id: str = "simulated_job",
+) -> pd.Series:
+    """Construct a scheduler-compatible job record for interactive simulations."""
+    return pd.Series(
+        {
+            "job_id": job_id,
+            "origin_city": origin_city,
+            "power_demand": float(power_demand),
+            "duration_hours": int(duration_hours),
+            "earliest_start": pd.Timestamp(earliest_start),
+            "deadline": pd.Timestamp(deadline),
+            "priority": int(priority),
+            "priority_label": "high" if int(priority) == 0 else "low",
+        }
+    )
+
+
 def _resolve_path(path: str | Path) -> Path:
     candidate = Path(path)
     if candidate.is_absolute():
@@ -176,29 +200,30 @@ def _reserve_capacity(
         used_capacity[(dc_id, ts)] = used_capacity.get((dc_id, ts), 0.0) + required_power
 
 
-def _find_best_assignment(
+def _enumerate_candidates(
     job: pd.Series,
     dc_df: pd.DataFrame,
     env_lookup: dict[str, pd.DataFrame],
     time_index: pd.DatetimeIndex,
-    used_capacity: dict[tuple[str, pd.Timestamp], float],
+    used_capacity: dict[tuple[str, pd.Timestamp], float] | None,
     alpha: float,
     beta: float,
     gamma: float,
-) -> ScheduleCandidate | None:
+) -> list[ScheduleCandidate]:
     duration_hours = int(job["duration_hours"])
     earliest_start = pd.Timestamp(job["earliest_start"]).floor("h")
     latest_start = (pd.Timestamp(job["deadline"]) - pd.Timedelta(hours=duration_hours)).floor("h")
     required_power = float(job["power_demand"])
 
     if latest_start < earliest_start:
-        return None
+        return []
 
     starts = _candidate_starts(time_index, earliest_start, latest_start)
     if not starts:
-        return None
+        return []
 
-    best: ScheduleCandidate | None = None
+    candidates: list[ScheduleCandidate] = []
+    capacity_state = used_capacity or {}
     for _, dc_row in dc_df.iterrows():
         city = dc_row["city"]
         city_env = env_lookup.get(city)
@@ -212,7 +237,7 @@ def _find_best_assignment(
                 continue
 
             if not _capacity_available(
-                used_capacity,
+                capacity_state,
                 str(dc_row["dc_id"]),
                 hours,
                 required_power,
@@ -237,10 +262,85 @@ def _find_best_assignment(
                 expected_co2_kg=required_power * co2_component * duration_hours,
                 expected_water_liters=required_power * water_component * duration_hours,
             )
-            if best is None or candidate.score < best.score:
-                best = candidate
+            candidates.append(candidate)
 
-    return best
+    return sorted(candidates, key=lambda candidate: candidate.score)
+
+
+def _find_best_assignment(
+    job: pd.Series,
+    dc_df: pd.DataFrame,
+    env_lookup: dict[str, pd.DataFrame],
+    time_index: pd.DatetimeIndex,
+    used_capacity: dict[tuple[str, pd.Timestamp], float],
+    alpha: float,
+    beta: float,
+    gamma: float,
+) -> ScheduleCandidate | None:
+    candidates = _enumerate_candidates(
+        job=job,
+        dc_df=dc_df,
+        env_lookup=env_lookup,
+        time_index=time_index,
+        used_capacity=used_capacity,
+        alpha=alpha,
+        beta=beta,
+        gamma=gamma,
+    )
+    return candidates[0] if candidates else None
+
+
+def rank_job_candidates(
+    env_df: pd.DataFrame,
+    dc_df: pd.DataFrame,
+    job: pd.Series,
+    alpha: float = 1.0,
+    beta: float = 1.0,
+    gamma: float = 0.05,
+    top_k: int = 5,
+) -> pd.DataFrame:
+    """Return the best feasible routing options for a single job."""
+    env_lookup = _build_environment_lookup(env_df)
+    time_index = pd.DatetimeIndex(sorted(env_df["timestamp"].unique()))
+    candidates = _enumerate_candidates(
+        job=job,
+        dc_df=dc_df,
+        env_lookup=env_lookup,
+        time_index=time_index,
+        used_capacity={},
+        alpha=alpha,
+        beta=beta,
+        gamma=gamma,
+    )
+
+    unique_candidates: list[ScheduleCandidate] = []
+    seen_cities: set[str] = set()
+    for candidate in candidates:
+        if candidate.city in seen_cities:
+            continue
+        unique_candidates.append(candidate)
+        seen_cities.add(candidate.city)
+        if len(unique_candidates) >= top_k:
+            break
+
+    ranked_rows: list[dict[str, object]] = []
+    for rank, candidate in enumerate(unique_candidates, start=1):
+        ranked_rows.append(
+            {
+                "rank": rank,
+                "job_id": job.get("job_id", "simulated_job"),
+                "origin_city": str(job["origin_city"]),
+                "assigned_dc_id": candidate.dc_id,
+                "assigned_city": candidate.city,
+                "scheduled_start": candidate.start_time,
+                "scheduled_end": candidate.end_time,
+                "scheduler_score": candidate.score,
+                "expected_co2_kg": candidate.expected_co2_kg,
+                "expected_water_liters": candidate.expected_water_liters,
+                "same_city": int(str(job["origin_city"]) == candidate.city),
+            }
+        )
+    return pd.DataFrame(ranked_rows)
 
 
 def schedule_jobs(
@@ -366,8 +466,14 @@ def run_scheduling_pipeline(
     jobs_path: str | Path = DEFAULT_JOBS_PATH,
     dc_config_path: str | Path = DEFAULT_DC_CONFIG_PATH,
     job_limit: int | None = None,
+    alpha: float = 1.0,
+    beta: float = 1.0,
+    gamma: float = 0.05,
+    priority_filter: str | None = None,
 ) -> dict[str, object]:
     jobs_df = load_jobs_dataset(jobs_path)
+    if priority_filter is not None and priority_filter != "all" and "priority_label" in jobs_df.columns:
+        jobs_df = jobs_df[jobs_df["priority_label"].str.lower() == priority_filter.lower()].copy()
     if job_limit is not None:
         jobs_df = jobs_df.head(job_limit).copy()
 
@@ -375,7 +481,14 @@ def run_scheduling_pipeline(
     data_df = load_dataset(data_path)
     env_df = prepare_environment_frame(data_df, city_subset=dc_df["city"].unique().tolist())
 
-    optimized_schedule = schedule_jobs(env_df, jobs_df, dc_df)
+    optimized_schedule = schedule_jobs(
+        env_df,
+        jobs_df,
+        dc_df,
+        alpha=alpha,
+        beta=beta,
+        gamma=gamma,
+    )
     baseline_schedule = schedule_jobs_naive(env_df, jobs_df, dc_df)
 
     optimized_summary = summarize_schedule(optimized_schedule)
@@ -418,6 +531,30 @@ def parse_args() -> argparse.Namespace:
         help="Optional number of jobs to schedule for a quick experiment.",
     )
     parser.add_argument(
+        "--alpha",
+        type=float,
+        default=1.0,
+        help="Weight for carbon intensity in the scheduler objective.",
+    )
+    parser.add_argument(
+        "--beta",
+        type=float,
+        default=1.0,
+        help="Weight for water intensity in the scheduler objective.",
+    )
+    parser.add_argument(
+        "--gamma",
+        type=float,
+        default=0.05,
+        help="Latency penalty applied when routing away from the origin city.",
+    )
+    parser.add_argument(
+        "--priority-filter",
+        default="all",
+        choices=["all", "high", "low"],
+        help="Optional job-priority subset to schedule.",
+    )
+    parser.add_argument(
         "--output-path",
         default="data/processed/schedule_results.csv",
         help="Where to write the optimized schedule CSV.",
@@ -432,6 +569,10 @@ def main() -> None:
         jobs_path=args.jobs_path,
         dc_config_path=args.dc_config_path,
         job_limit=args.job_limit,
+        alpha=args.alpha,
+        beta=args.beta,
+        gamma=args.gamma,
+        priority_filter=args.priority_filter,
     )
 
     output_path = _resolve_path(args.output_path)

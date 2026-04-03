@@ -183,16 +183,40 @@ The exploratory analysis notebook is located at:
 It can be used to inspect distributions, temporal trends, regional differences,
 and feature relationships before formal model training.
 
+### 7. Launch the Streamlit App
+
+```bash
+streamlit run streamlit_app.py
+```
+
+The app currently includes:
+
+- an `Overview` page with KPI cards and a city map colored by CO2 impact
+- a `Scheduler Simulator` page with routing controls, backend scheduling calls,
+  multiple candidate paths, and PyDeck flow visualization
+
 ## Project Structure
 
 ```text
 Capstone_Research/
 ├── data/
-│   └── sample_dataset.xlsx
+│   ├── reference/
+│   │   └── city_coordinates.csv
+│   ├── sample_dataset.xlsx
+│   └── templates/
+│       └── dc_config_template.csv
 ├── notebooks/
 │   └── eda.ipynb
 ├── src/
 │   ├── __init__.py
+│   ├── dashboard/
+│   │   ├── __init__.py
+│   │   ├── components.py
+│   │   ├── config.py
+│   │   ├── maps.py
+│   │   ├── overview_page.py
+│   │   ├── scheduler_page.py
+│   │   └── services.py
 │   ├── data_loader.py
 │   ├── preprocessing.py
 │   ├── main.py
@@ -201,12 +225,10 @@ Capstone_Research/
 │   ├── evaluate.py
 │   ├── weather_loader.py
 │   └── workload_loader.py
-├── data/
-│   └── templates/
-│       └── dc_config_template.csv
 ├── docs/
 │   ├── data_requirements.md
 │   └── workload_trace_guide.md
+├── streamlit_app.py
 ├── requirements.txt
 ├── .gitignore
 └── README.md

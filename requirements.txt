@@ -16,3 +16,5 @@ requests==2.32.5
 statsmodels==0.14.6
 pulp==3.3.0
 plotly==6.6.0
+streamlit==1.50.0
+pydeck==0.9.1
