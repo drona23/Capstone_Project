@@ -24,6 +24,9 @@ pipeline.
 The project uses a structured dataset of data center and grid-related signals
 stored in `data/sample_dataset.xlsx`.
 
+The loader also supports `.csv`, `.parquet`, and `.zip` archives that contain a
+master dataset such as `base_data_with_metrics.parquet`.
+
 The dataset is expected to contain fields such as:
 
 - `TIMESTAMP`
@@ -54,7 +57,8 @@ The current workflow:
 - drops rows with missing target values before training
 
 Data loading is handled by [src/data_loader.py](src/data_loader.py), which
-standardizes dataset resolution through `data/sample_dataset.xlsx`.
+standardizes dataset resolution through `data/sample_dataset.xlsx` and can also
+load `.csv`, `.parquet`, and `.zip` inputs.
 
 ### Modeling
 
@@ -143,6 +147,12 @@ Optional example with external weather enrichment:
 python3 -m src.main --data-path data/sample_dataset.xlsx --weather-path ../weather_zip_city_2019_2023_meteostat
 ```
 
+Optional example using the downloaded master archive directly:
+
+```bash
+python3 -m src.main --data-path "/Users/drona23/Downloads/Archive 3.zip"
+```
+
 ### 4. Explore the Notebook
 
 The exploratory analysis notebook is located at:
@@ -168,6 +178,8 @@ Capstone_Research/
 │   ├── train.py
 │   ├── evaluate.py
 │   └── weather_loader.py
+├── docs/
+│   └── data_requirements.md
 ├── requirements.txt
 ├── .gitignore
 └── README.md
@@ -191,3 +203,6 @@ This repository is structured as a research-oriented machine learning project:
 it combines exploratory analysis, modular preprocessing, baseline modeling, and
 reproducible evaluation into a foundation that can support deeper experimental
 work on sustainable AI infrastructure.
+
+For the exact list of remaining data gaps and source links, see
+[docs/data_requirements.md](docs/data_requirements.md).
