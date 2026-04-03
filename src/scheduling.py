@@ -56,6 +56,8 @@ def build_job_record(
     job_id: str = "simulated_job",
 ) -> pd.Series:
     """Construct a scheduler-compatible job record for interactive simulations."""
+    priority_value = int(priority)
+    priority_label = {0: "high", 1: "medium", 2: "low"}.get(priority_value, "low")
     return pd.Series(
         {
             "job_id": job_id,
@@ -64,8 +66,8 @@ def build_job_record(
             "duration_hours": int(duration_hours),
             "earliest_start": pd.Timestamp(earliest_start),
             "deadline": pd.Timestamp(deadline),
-            "priority": int(priority),
-            "priority_label": "high" if int(priority) == 0 else "low",
+            "priority": priority_value,
+            "priority_label": priority_label,
         }
     )
 
@@ -300,6 +302,49 @@ def rank_job_candidates(
     top_k: int = 5,
 ) -> pd.DataFrame:
     """Return the best feasible routing options for a single job."""
+    candidates_df = list_job_candidates(
+        env_df=env_df,
+        dc_df=dc_df,
+        job=job,
+        alpha=alpha,
+        beta=beta,
+        gamma=gamma,
+    )
+    if candidates_df.empty:
+        return candidates_df
+
+    unique_candidates = (
+        candidates_df.sort_values("scheduler_score")
+        .drop_duplicates(subset=["assigned_city"], keep="first")
+        .head(top_k)
+        .reset_index(drop=True)
+    )
+    unique_candidates["rank"] = np.arange(1, len(unique_candidates) + 1)
+    ordered_columns = [
+        "rank",
+        "job_id",
+        "origin_city",
+        "assigned_dc_id",
+        "assigned_city",
+        "scheduled_start",
+        "scheduled_end",
+        "scheduler_score",
+        "expected_co2_kg",
+        "expected_water_liters",
+        "same_city",
+    ]
+    return unique_candidates[ordered_columns]
+
+
+def list_job_candidates(
+    env_df: pd.DataFrame,
+    dc_df: pd.DataFrame,
+    job: pd.Series,
+    alpha: float = 1.0,
+    beta: float = 1.0,
+    gamma: float = 0.05,
+) -> pd.DataFrame:
+    """Return all feasible routing options for a single job."""
     env_lookup = _build_environment_lookup(env_df)
     time_index = pd.DatetimeIndex(sorted(env_df["timestamp"].unique()))
     candidates = _enumerate_candidates(
@@ -312,22 +357,10 @@ def rank_job_candidates(
         beta=beta,
         gamma=gamma,
     )
-
-    unique_candidates: list[ScheduleCandidate] = []
-    seen_cities: set[str] = set()
-    for candidate in candidates:
-        if candidate.city in seen_cities:
-            continue
-        unique_candidates.append(candidate)
-        seen_cities.add(candidate.city)
-        if len(unique_candidates) >= top_k:
-            break
-
     ranked_rows: list[dict[str, object]] = []
-    for rank, candidate in enumerate(unique_candidates, start=1):
+    for candidate in candidates:
         ranked_rows.append(
             {
-                "rank": rank,
                 "job_id": job.get("job_id", "simulated_job"),
                 "origin_city": str(job["origin_city"]),
                 "assigned_dc_id": candidate.dc_id,

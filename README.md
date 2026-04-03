@@ -186,14 +186,16 @@ and feature relationships before formal model training.
 ### 7. Launch the Streamlit App
 
 ```bash
-streamlit run streamlit_app.py
+streamlit run app.py
 ```
 
 The app currently includes:
 
-- an `Overview` page with KPI cards and a city map colored by CO2 impact
-- a `Scheduler Simulator` page with routing controls, backend scheduling calls,
-  multiple candidate paths, and PyDeck flow visualization
+- an `Overview` page with KPI cards, a dynamic time window, and a city map
+  where color tracks CO2 intensity and size tracks WUE
+- a `Scheduler Simulator` page with multi-objective controls, backend
+  scheduling calls, multi-path routing options, a comparison table, and PyDeck
+  path visualization
 
 ## Project Structure
 
@@ -209,14 +211,7 @@ Capstone_Research/
 │   └── eda.ipynb
 ├── src/
 │   ├── __init__.py
-│   ├── dashboard/
-│   │   ├── __init__.py
-│   │   ├── components.py
-│   │   ├── config.py
-│   │   ├── maps.py
-│   │   ├── overview_page.py
-│   │   ├── scheduler_page.py
-│   │   └── services.py
+│   ├── app_backend.py
 │   ├── data_loader.py
 │   ├── preprocessing.py
 │   ├── main.py
@@ -225,9 +220,17 @@ Capstone_Research/
 │   ├── evaluate.py
 │   ├── weather_loader.py
 │   └── workload_loader.py
+├── ui/
+│   ├── __init__.py
+│   ├── overview.py
+│   └── scheduler.py
+├── utils/
+│   ├── __init__.py
+│   └── visualization.py
 ├── docs/
 │   ├── data_requirements.md
 │   └── workload_trace_guide.md
+├── app.py
 ├── streamlit_app.py
 ├── requirements.txt
 ├── .gitignore
