@@ -89,7 +89,7 @@ class OverviewSnapshot:
 
 
 class SustainabilitySchedulingBackend:
-    """Backend façade for the Streamlit simulator."""
+    """Backend façade for API-backed scheduling simulations."""
 
     def __init__(
         self,
@@ -689,5 +689,5 @@ def run_scheduler(
     backend: SustainabilitySchedulingBackend,
     inputs: SchedulerInputs,
 ) -> list[dict[str, Any]]:
-    """Module-level scheduler entry point for the Streamlit app."""
+    """Module-level scheduler entry point for interactive simulation clients."""
     return backend.run_scheduler(inputs)

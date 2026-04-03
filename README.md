@@ -220,25 +220,31 @@ and feature relationships before formal model training.
 ### 7. Launch the API
 
 ```bash
-uvicorn src.api:app --reload
+python3 -m uvicorn src.api:app --reload
 ```
 
-### 8. Launch the Streamlit Simulation
+The repository now exposes the scheduling simulation through FastAPI rather than
+shipping a built-in Streamlit interface.
 
-```bash
-streamlit run app.py
-```
+Core API endpoints:
 
-The presentation interface is now a single-page simulation view:
+- `GET /health`
+- `GET /context`
+- `POST /simulate`
 
-- a large map that shows data-center nodes, water-scarcity shading, and
-  multi-path routing options
-- a compact control panel for priority, objective weights, and simulation hour
-- a result panel that explains the recommended route and compares it with a
-  naive baseline
+The external visualization layer can call `POST /simulate` with:
 
-The Streamlit front end calls the FastAPI `POST /simulate` endpoint and renders
-the returned routing candidates for stakeholder demos.
+- `priority`
+- `alpha`
+- `beta`
+- `gamma`
+- `time`
+- `latency_sensitivity`
+- `workload_size`
+- `origin_city`
+
+and receive candidate routes with carbon, water, latency, score, and route
+metadata for presentation or product integration.
 
 ## Project Structure
 
@@ -272,17 +278,9 @@ Capstone_Research/
 │   ├── train.py
 │   ├── weather_loader.py
 │   └── workload_loader.py
-├── ui/
-│   ├── __init__.py
-│   └── scheduler.py
-├── utils/
-│   ├── __init__.py
-│   └── visualization.py
 ├── docs/
 │   ├── data_requirements.md
 │   └── workload_trace_guide.md
-├── app.py
-├── streamlit_app.py
 ├── requirements.txt
 ├── .gitignore
 └── README.md
@@ -293,7 +291,8 @@ Capstone_Research/
 The project can be extended in several important directions:
 
 - optimize the current baseline through hyperparameter tuning
-- add XGBoost and Prophet experiments for stronger predictive benchmarks
+- extend the hybrid XGBoost + Prophet forecasting pipeline with more tuning and
+  diagnostics
 - incorporate feature selection and model explainability methods
 - expand evaluation with cross-validation and temporal holdout strategies
 - build a recommendation layer for workload shifting and greener scheduling
