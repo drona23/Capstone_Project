@@ -49,12 +49,17 @@ regional energy mix influence water and carbon outcomes.
 The preprocessing pipeline is implemented in [src/preprocessing.py](src/preprocessing.py).
 The current workflow:
 
-- converts `TIMESTAMP` into datetime features such as hour, day of week, and
-  month
+- converts `TIMESTAMP` into a canonical hourly city time series
+- derives cyclic time features such as hour, day of week, month, and
+  day-of-year encodings
 - computes carbon intensity as `co2_kg / total_gen_kwh`
+- normalizes weather signals such as temperature, humidity, and wind speed
 - derives fuel-share features from generation mix columns when available
-- keeps numeric modeling features and removes invalid infinite values
-- drops rows with missing target values before training
+- scales drought stress into a `scarcity_index`
+- creates leakage-safe exogenous feature profiles for future horizons and
+  evaluation windows
+- removes invalid infinite values and drops rows with missing target values
+  before training
 
 Data loading is handled by [src/data_loader.py](src/data_loader.py), which
 standardizes dataset resolution through `data/sample_dataset.xlsx` and can also
@@ -65,24 +70,40 @@ load `.csv`, `.parquet`, and `.zip` inputs.
 The training pipeline is implemented in [src/train.py](src/train.py).
 The end-to-end orchestration entrypoint is [src/main.py](src/main.py).
 
-The current baseline approach trains two separate regression models:
+The forecasting pipeline trains two target families:
 
-- one model for `WUE_total`
-- one model for carbon intensity
+- `WUE_total`
+- carbon intensity
 
-Both models use:
+For each target, the system trains:
 
-- median imputation for missing numeric values
-- `RandomForestRegressor` as the baseline estimator
-- a train/test split for out-of-sample evaluation
+- a per-city Prophet model that captures temporal trend and seasonality
+- a direct XGBoost regressor using:
+  - time features
+  - weather features
+  - fuel mix shares
+  - water scarcity index
+  - one-hot encoded city indicators
+- a hybrid model where:
+  - Prophet produces the baseline forecast
+  - XGBoost learns the residual error
+  - final prediction = `Prophet + XGBoost residual`
 
 The pipeline can also optionally merge hourly weather features before training,
 including temperature, dew point, humidity, precipitation, wind, pressure, and
 derived weather stress indicators.
 
-The dependency stack also includes `xgboost` and `prophet` so the project can
-expand into stronger gradient-boosted baselines and time-aware forecasting
-experiments in later iterations.
+Training uses a strict time-based split with the final 24-48 hours held out for
+evaluation. To avoid leakage, the evaluation horizon and future inference
+horizon both use exogenous feature profiles derived only from historical
+training data rather than from future observations.
+
+Trained artifacts are saved to:
+
+- `models/co2_model.pkl`
+- `models/wue_model.pkl`
+- `models/prophet_models/`
+- `data/processed/city_forecasts_24h.csv` or `city_forecasts_48h.csv`
 
 ### Evaluation
 
@@ -94,18 +115,20 @@ The current project reports standard regression metrics:
 - MAE
 - R2
 
-These metrics are printed separately for the water-use model and the
-carbon-intensity model.
+These metrics are reported separately for Prophet, direct XGBoost, and the
+hybrid model for both WUE and carbon intensity. The pipeline also compares the
+XGBoost and hybrid models against the Prophet baseline to quantify improvement
+in RMSE.
 
 ## Results
 
-Results are currently a placeholder until the finalized dataset is loaded and
-the training pipeline is executed on the full research data.
+Results are generated when the forecasting pipeline is executed on the research
+dataset.
 
 Planned result reporting includes:
 
-- baseline model performance for both prediction targets
-- comparison across candidate models such as Random Forest and XGBoost
+- Prophet vs XGBoost vs hybrid model performance for both prediction targets
+- 24-48 hour city-level forecast tables
 - feature importance and regional trend interpretation
 - discussion of operational recommendations based on predicted impact
 
@@ -138,7 +161,12 @@ python3 -m src.main --data-path data/sample_dataset.xlsx
 Optional example with custom settings:
 
 ```bash
-python3 -m src.main --data-path data/sample_dataset.xlsx --test-size 0.25 --random-state 7
+python3 -m src.main \
+  --data-path data/sample_dataset.xlsx \
+  --history-days 365 \
+  --test-horizon-hours 48 \
+  --forecast-horizon-hours 48 \
+  --random-state 7
 ```
 
 Optional example with external weather enrichment:
@@ -152,6 +180,12 @@ Optional example using the downloaded master archive directly:
 ```bash
 python3 -m src.main --data-path "/Users/drona23/Downloads/Archive 3.zip"
 ```
+
+When training completes, the pipeline writes:
+
+- XGBoost model bundles to `models/co2_model.pkl` and `models/wue_model.pkl`
+- per-city Prophet artifacts under `models/prophet_models/`
+- next-horizon forecasts under `data/processed/`
 
 ### 4. Build Workload Jobs from the Azure Trace
 
@@ -204,20 +238,28 @@ Capstone_Research/
 ├── data/
 │   ├── reference/
 │   │   └── city_coordinates.csv
+│   ├── processed/
+│   │   ├── city_forecasts_24h.csv
+│   │   └── city_forecasts_48h.csv
 │   ├── sample_dataset.xlsx
 │   └── templates/
 │       └── dc_config_template.csv
+├── models/
+│   ├── co2_model.pkl
+│   ├── wue_model.pkl
+│   └── prophet_models/
 ├── notebooks/
 │   └── eda.ipynb
 ├── src/
 │   ├── __init__.py
 │   ├── app_backend.py
 │   ├── data_loader.py
-│   ├── preprocessing.py
+│   ├── evaluate.py
 │   ├── main.py
+│   ├── preprocessing.py
+│   ├── runtime.py
 │   ├── scheduling.py
 │   ├── train.py
-│   ├── evaluate.py
 │   ├── weather_loader.py
 │   └── workload_loader.py
 ├── ui/
