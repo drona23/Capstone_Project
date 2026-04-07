@@ -28,3 +28,6 @@ models/
 
 # OS files
 .DS_Store
+
+# Private notes - never on GitHub
+NOTES/

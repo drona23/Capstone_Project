@@ -1,9 +1,29 @@
-dc_id,city,max_power_per_hour,pue,water_usage_factor,region_water_scarcity,is_new
-dc_ashburn_1,Ashburn,550,1.12,0.90,0.52,1
-dc_atlanta_1,Atlanta,500,1.18,1.00,0.61,1
-dc_austin_1,Austin,520,1.20,1.05,0.72,0
-dc_baltimore_1,Baltimore,460,1.16,0.95,0.55,1
-dc_boston_1,Boston,430,1.14,0.92,0.48,1
-dc_charlotte_1,Charlotte,470,1.17,0.97,0.58,1
-dc_chicago_1,Chicago,540,1.19,1.00,0.50,0
-dc_dallas_1,Dallas,600,1.22,1.08,0.74,0
+dc_id,city,max_power_per_hour,pue,water_usage_factor,region_water_scarcity,is_new,category
+dc_abilene_1,Abilene,1200,1.15,1.10,0.78,1,stargate
+dc_shackelford_1,Shackelford County,1400,1.14,1.08,0.80,1,stargate
+dc_donaana_1,Dona Ana County,1000,1.16,1.12,0.85,1,stargate
+dc_lordstown_1,Lordstown,750,1.13,0.95,0.45,1,stargate
+dc_milam_1,Milam County,750,1.15,1.06,0.75,1,stargate
+dc_portwashington_1,Port Washington,902,1.12,0.92,0.42,1,stargate
+dc_mountpleasant_1,Mount Pleasant,500,1.13,0.93,0.43,1,hyperscaler
+dc_atlanta_1,Atlanta,500,1.18,1.00,0.61,1,hyperscaler
+dc_wilbarger_1,Wilbarger County,600,1.16,1.09,0.79,1,hyperscaler
+dc_armstrong_1,Armstrong County,400,1.17,1.11,0.82,1,hyperscaler
+dc_haskell_1,Haskell County,400,1.16,1.09,0.80,1,hyperscaler
+dc_pineisland_1,Pine Island,300,1.12,0.90,0.38,1,hyperscaler
+dc_richland_1,Richland Parish,2000,1.20,1.05,0.65,1,hyperscaler
+dc_beaverdam_1,Beaver Dam,200,1.13,0.91,0.41,1,hyperscaler
+dc_elpaso_1,El Paso,200,1.19,1.14,0.88,1,hyperscaler
+dc_bowlinggreen_1,Bowling Green,150,1.14,0.94,0.47,1,hyperscaler
+dc_carlisle_1,Carlisle,2000,1.13,0.95,0.46,1,hyperscaler
+dc_northernindiana_1,Northern Indiana,2400,1.12,0.94,0.44,1,hyperscaler
+dc_memphis_1,Memphis,2000,1.18,1.03,0.62,1,neocloud
+dc_lancaster_1,Lancaster,300,1.14,0.93,0.50,1,neocloud
+dc_kenilworth_1,Kenilworth,250,1.15,0.96,0.52,1,neocloud
+dc_westtexas_1,West Texas,2000,1.17,1.10,0.83,1,neocloud
+dc_dallas_1,Dallas,500,1.22,1.08,0.74,0,neocloud
+dc_albany_1,Albany,500,1.13,0.91,0.46,1,neocloud
+dc_littlerock_1,Little Rock,1000,1.17,1.02,0.63,1,independent
+dc_meridian_1,Meridian,320,1.18,1.04,0.66,1,independent
+dc_rockymount_1,Rocky Mount,900,1.15,0.97,0.55,1,independent
+dc_powhatan_1,Powhatan County,365,1.14,0.96,0.53,1,independent
