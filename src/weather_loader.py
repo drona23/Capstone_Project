@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 
@@ -214,3 +215,110 @@ def merge_weather_features(
         "total_rows": total_rows,
         "coverage": coverage,
     }
+
+
+# ── Live pipeline data source ─────────────────────────────────────────────────
+
+PIPELINE_DB_URL_DEFAULT = (
+    "postgresql+psycopg2://weather_user:weather_password@localhost:15432/weather_data"
+)
+
+# Maps pipeline weather_records columns -> capstone weather_* feature names.
+# Pipeline uses metric units (temp in C, speed in m/s, pressure in hPa).
+# Meteostat-based features use the same units, so no conversion needed.
+_PIPELINE_COLUMN_MAP = {
+    "city":            "weather_city",
+    "temperature":     "weather_temp",
+    "humidity":        "weather_rhum",
+    "pressure":        "weather_pres",
+    "wind_speed":      "weather_wspd",
+    "wind_direction":  "weather_wdir",
+    "timestamp":       "weather_timestamp_hour",
+}
+
+
+def load_from_pipeline_db(
+    hours: int = 48,
+    db_url: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Load live weather data from the weather pipeline's PostgreSQL database.
+
+    This is an alternative to load_weather_dataset() for when you want
+    real-time hourly data instead of the historical Meteostat CSV.
+    The pipeline collects weather every hour for the same 28 data center
+    locations used in the capstone, so the city names match directly.
+
+    Args:
+        hours: How many hours of history to fetch (default 48).
+        db_url: SQLAlchemy connection string. Defaults to the pipeline's
+                local PostgreSQL on port 15432.
+
+    Returns:
+        DataFrame with the same weather_* prefixed columns produced by
+        load_weather_dataset(), ready for merge_weather_features().
+    """
+    try:
+        from sqlalchemy import create_engine, text
+    except ImportError as exc:
+        raise ImportError("sqlalchemy is required: pip install sqlalchemy psycopg2-binary") from exc
+
+    url = db_url or PIPELINE_DB_URL_DEFAULT
+    engine = create_engine(url)
+
+    query = text(
+        f"""
+        SELECT
+            city,
+            timestamp,
+            temperature,
+            humidity,
+            pressure,
+            wind_speed,
+            wind_direction
+        FROM weather_records
+        WHERE timestamp >= NOW() - INTERVAL '{int(hours)} hours'
+        ORDER BY timestamp DESC
+        """
+    )
+
+    with engine.connect() as conn:
+        df = pd.read_sql(query, conn)
+
+    if df.empty:
+        raise ValueError(
+            f"No pipeline weather data found in the last {hours} hours. "
+            "Run the pipeline first: python -m src.main"
+        )
+
+    # Rename to capstone weather_* convention
+    df = df.rename(columns=_PIPELINE_COLUMN_MAP)
+
+    # Floor to hour so timestamps align with capstone merge keys
+    df["weather_timestamp_hour"] = pd.to_datetime(
+        df["weather_timestamp_hour"]
+    ).dt.floor("h")
+
+    # Lowercase city for case-insensitive join
+    df["weather_city"] = df["weather_city"].str.strip().str.lower()
+
+    # Derived features that match what load_weather_dataset() produces
+    df["weather_temp_dewpoint_gap"] = None   # dwpt not in pipeline - fill as needed
+    df["weather_rain_flag"] = 0              # no precip data in pipeline
+    df["weather_humidity_temp_index"] = (
+        df["weather_temp"] * df["weather_rhum"] / 100.0
+    )
+
+    feature_columns = [
+        "weather_timestamp_hour",
+        "weather_city",
+        "weather_temp",
+        "weather_rhum",
+        "weather_pres",
+        "weather_wspd",
+        "weather_wdir",
+        "weather_temp_dewpoint_gap",
+        "weather_rain_flag",
+        "weather_humidity_temp_index",
+    ]
+    return df[[c for c in feature_columns if c in df.columns]]
