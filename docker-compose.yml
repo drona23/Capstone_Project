@@ -1,0 +1,23 @@
+services:
+
+  # ── Backend: FastAPI ─────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .          # use root Dockerfile
+      dockerfile: Dockerfile
+    container_name: capstone_backend
+    ports:
+      - "8000:8000"       # localhost:8000 → container:8000
+    restart: unless-stopped
+
+  # ── Frontend: React + nginx ──────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend   # use frontend/Dockerfile
+      dockerfile: Dockerfile
+    container_name: capstone_frontend
+    ports:
+      - "3000:80"           # localhost:3000 → nginx:80
+    depends_on:
+      - backend
+    restart: unless-stopped

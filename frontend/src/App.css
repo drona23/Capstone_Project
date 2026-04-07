@@ -168,6 +168,10 @@
   color: #375448;
 }
 
+.field--summary {
+  opacity: 0.85;
+}
+
 .field select,
 .field input,
 .run-button,
@@ -567,4 +571,96 @@
   .path-table__head {
     display: none;
   }
+}
+
+/* ── SHAP Feature Importance Chart ─────────────────────────────────────────── */
+
+.shap-loading {
+  margin: 0;
+  color: #7a9186;
+  font-size: 0.88rem;
+}
+
+.shap-legend {
+  margin: 0 0 10px;
+  font-size: 0.86rem;
+  color: #5a6e64;
+}
+
+.shap-toggle {
+  display: flex;
+  gap: 6px;
+}
+
+.shap-toggle button {
+  border: 1px solid rgba(16, 38, 31, 0.12);
+  border-radius: 999px;
+  padding: 5px 12px;
+  background: #edf2ef;
+  color: #395347;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.shap-toggle button.is-active {
+  background: #143828;
+  color: white;
+  border-color: transparent;
+}
+
+.shap-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.shap-row {
+  display: grid;
+  grid-template-columns: 148px 1fr 72px;
+  align-items: center;
+  gap: 10px;
+}
+
+.shap-row__label {
+  font-size: 0.82rem;
+  color: #3d5549;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shap-row__track {
+  height: 8px;
+  background: #edf2ef;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.shap-row__bar {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+
+.shap-row__bar--up {
+  background: #d44833;
+}
+
+.shap-row__bar--down {
+  background: #2ca86b;
+}
+
+.shap-row__value {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-align: right;
+}
+
+.shap-value--up {
+  color: #a83422;
+}
+
+.shap-value--down {
+  color: #1a7a4a;
 }

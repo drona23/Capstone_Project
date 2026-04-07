@@ -1,6 +1,7 @@
 import type {
   BatchSimulationRequest,
   BatchSimulationResponse,
+  ExplanationResponse,
   SchedulerContext,
   SimulationRequest,
   SimulationResponse,
@@ -44,4 +45,13 @@ export function runBatchSimulation(
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+export function fetchExplanation(
+  city: string,
+  target: 'co2' | 'wue',
+  time: string,
+): Promise<ExplanationResponse> {
+  const params = new URLSearchParams({ city, target, time })
+  return fetchJson<ExplanationResponse>(`/explain?${params.toString()}`)
 }

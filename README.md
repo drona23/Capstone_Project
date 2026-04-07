@@ -1,363 +1,320 @@
 # Making AI Less Thirsty
 
-Predicting data center water use and carbon impact with machine learning.
+> Predicting how much carbon and water a data center will use — then automatically sending AI jobs to the cleanest one available.
 
-## Problem Statement
+---
 
-Modern AI workloads increase pressure on data center infrastructure by driving
-higher compute demand, cooling demand, electricity consumption, and water use.
-As model training and inference scale, operators need better tools to estimate
-the environmental cost of where and when workloads run.
+## The Problem in Plain English
 
-This project investigates whether machine learning can be used to predict two
-important sustainability indicators:
+When you ask an AI model a question, a computer somewhere runs the calculation. That computer uses electricity and water to stay cool. The problem:
 
-- water usage effectiveness (`WUE_total`)
-- carbon intensity derived from `co2_kg / total_gen_kwh`
+- **Different power sources produce different carbon** — a data center running on solar emits far less CO₂ than one running on coal
+- **Carbon output changes by the hour** — at night in Texas, wind covers most of the grid; midday on a cloudy day, coal picks up the slack
+- **Nobody is optimising for this** — jobs get sent to the nearest or cheapest server, not the cleanest one
 
-The broader goal is to support more sustainable workload planning by combining
-environmental, temporal, and power-generation features into a predictive
-pipeline.
+This project builds a system that watches those changes in real time and routes computing jobs toward whichever data center is cleanest *right now*.
 
-## Dataset Description
+---
 
-The project uses a structured dataset of data center and grid-related signals
-stored in `data/sample_dataset.xlsx`.
+## What It Actually Does
 
-The loader also supports `.csv`, `.parquet`, and `.zip` archives that contain a
-master dataset such as `base_data_with_metrics.parquet`.
+```
+Step 1 — Collect data
+  Download hourly electricity generation (EIA) and weather (Open-Meteo)
+  for 28 U.S. data center cities. Free government data, no API keys needed.
 
-The dataset is expected to contain fields such as:
+Step 2 — Predict the future
+  Train machine learning models that forecast CO₂ intensity and water
+  usage for each city 48 hours ahead. Uses XGBoost + Prophet + hybrid.
 
-- `TIMESTAMP`
-- `WUE_total`
-- `co2_kg`
-- `total_gen_kwh`
-- `total_gen_mwh`
-- `EGRIDREGION`
-- weather variables such as temperature and humidity
-- electricity generation mix features such as `COAL`, `HYDRO`, `NATURALGAS`,
-  `NUCLEAR`, `SOLAR`, and `WIND`
+Step 3 — Schedule jobs
+  Given a batch of AI workloads and the 48-hour forecast, find the
+  routing plan that minimises carbon + water while respecting deadlines.
 
-These features allow the project to study how operational conditions, time, and
-regional energy mix influence water and carbon outcomes.
+Step 4 — Show the reasoning
+  For any routing decision, explain which features (temperature, time of
+  day, fuel mix) pushed the prediction up or down — using SHAP values.
 
-## Methodology
+Step 5 — Visualise it
+  Interactive U.S. map showing routing flows, environmental trade-offs,
+  and a baseline comparison so you can see the improvement.
+```
 
-### Data Preprocessing
+---
 
-The preprocessing pipeline is implemented in [src/preprocessing.py](src/preprocessing.py).
-The current workflow:
+## Results (from real model output)
 
-- converts `TIMESTAMP` into a canonical hourly city time series
-- derives cyclic time features such as hour, day of week, month, and
-  day-of-year encodings
-- computes carbon intensity as `co2_kg / total_gen_kwh`
-- normalizes weather signals such as temperature, humidity, and wind speed
-- derives fuel-share features from generation mix columns when available
-- scales drought stress into a `scarcity_index`
-- creates leakage-safe exogenous feature profiles for future horizons and
-  evaluation windows
-- removes invalid infinite values and drops rows with missing target values
-  before training
+### CO₂ varies 3.2× across cities
 
-Data loading is handled by [src/data_loader.py](src/data_loader.py), which
-standardizes dataset resolution through `data/sample_dataset.xlsx` and can also
-load `.csv`, `.parquet`, and `.zip` inputs.
+| City | Avg CO₂ Intensity |
+|---|---|
+| Albany, NY (cleanest) | 0.206 kg CO₂/kWh |
+| Dallas, TX | 0.320 kg CO₂/kWh |
+| Dona Ana County, NM (dirtiest) | 0.667 kg CO₂/kWh |
 
-### Modeling
+**What this means:** Sending the same job to Albany instead of Dona Ana County produces one-third the carbon. The scheduler exploits this gap automatically.
 
-The training pipeline is implemented in [src/train.py](src/train.py).
-The end-to-end orchestration entrypoint is [src/main.py](src/main.py).
+### Water usage also varies by city
 
-The forecasting pipeline trains two target families:
+| City | WUE (litres per kWh) |
+|---|---|
+| Northern Indiana (most efficient) | 1.117 |
+| Shackelford County, TX (least efficient) | 1.186 |
 
-- `WUE_total`
-- carbon intensity
+### Scheduler performance (50-job test)
 
-For each target, the system trains:
+| Jobs submitted | Jobs scheduled | Coverage |
+|---|---|---|
+| 50 | 50 | 100% |
 
-- a per-city Prophet model that captures temporal trend and seasonality
-- a direct XGBoost regressor using:
-  - time features
-  - weather features
-  - fuel mix shares
-  - water scarcity index
-  - one-hot encoded city indicators
-- a hybrid model where:
-  - Prophet produces the baseline forecast
-  - XGBoost learns the residual error
-  - final prediction = `Prophet + XGBoost residual`
+---
 
-The pipeline can also optionally merge hourly weather features before training,
-including temperature, dew point, humidity, precipitation, wind, pressure, and
-derived weather stress indicators.
+## How the System Is Built
 
-Training uses a strict time-based split with the final 24-48 hours held out for
-evaluation. To avoid leakage, the evaluation horizon and future inference
-horizon both use exogenous feature profiles derived only from historical
-training data rather than from future observations.
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  DATA LAYER                                                          │
+│  EIA (electricity grid) + Open-Meteo (weather) + EPA (emissions)    │
+│  → build_dataset.py → one clean CSV with everything merged          │
+│                                                                      │
+│  Azure VM Trace (2.2M real cloud jobs)                              │
+│  → workload_loader.py → realistic job queue for testing             │
+└─────────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│  ML LAYER                                                            │
+│  For each city, for each hour, predict:                             │
+│    • CO₂ intensity (how dirty is the electricity right now?)        │
+│    • WUE (how much water does cooling use?)                         │
+│                                                                      │
+│  Three models trained per target:                                   │
+│    Prophet  — captures time patterns (rush hour, seasonal)          │
+│    XGBoost  — learns from weather + fuel mix + time features        │
+│    Hybrid   — Prophet + XGBoost residual (best of both)             │
+│                                                                      │
+│  tune.py   — Optuna auto-searches for best XGBoost settings        │
+│  explain.py — SHAP shows WHY a prediction is high or low           │
+└─────────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│  SCHEDULER + API + DASHBOARD                                         │
+│  scheduling.py — scores every (job, city, time) combination:        │
+│    score = α × carbon + β × water + γ × distance                   │
+│  α, β, γ are sliders you control — trade off green vs fast          │
+│                                                                      │
+│  FastAPI backend  — serves predictions and routing decisions        │
+│  React frontend   — interactive U.S. map, batch mode, SHAP chart   │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
-Trained artifacts are saved to:
+---
 
-- `models/co2_model.pkl`
-- `models/wue_model.pkl`
-- `models/prophet_models/`
-- `data/processed/city_forecasts_24h.csv` or `city_forecasts_48h.csv`
+## Weather Pipeline Integration
 
-### Evaluation
+This project connects to a **live weather data pipeline** built in the companion `weather_pipeline` project (Apache Airflow + PostgreSQL).
 
-Evaluation utilities are defined in [src/evaluate.py](src/evaluate.py).
+When the weather pipeline is running, Capstone can pull **real-time hourly weather** for all 28 cities instead of using historical CSV data:
 
-The current project reports standard regression metrics:
+```python
+from src.weather_loader import load_from_pipeline_db
 
-- RMSE
-- MAE
-- R2
+# Returns live weather from the last 48 hours
+df = load_from_pipeline_db(hours=48)
+```
 
-These metrics are reported separately for Prophet, direct XGBoost, and the
-hybrid model for both WUE and carbon intensity. The pipeline also compares the
-XGBoost and hybrid models against the Prophet baseline to quantify improvement
-in RMSE.
+The pipeline runs as a Docker service on `localhost:15432`. If it's not running, the system falls back to the historical Meteostat dataset automatically.
 
-## Results
+---
 
-Results are generated when the forecasting pipeline is executed on the research
-dataset.
+## Quick Start
 
-Planned result reporting includes:
-
-- Prophet vs XGBoost vs hybrid model performance for both prediction targets
-- 24-48 hour city-level forecast tables
-- feature importance and regional trend interpretation
-- discussion of operational recommendations based on predicted impact
-
-## How to Run the Project
-
-### 1. Install Requirements
-
-From the project root:
+### Option A — Docker (recommended, no setup required)
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+git clone <this-repo>
+cd Capstone_Research
+docker compose up --build
+```
+
+Open in your browser:
+- **`http://localhost:3000`** — the interactive routing dashboard
+- **`http://localhost:8000/docs`** — the API with a built-in test interface
+
+### Option B — Run locally
+
+```bash
+# Install Python dependencies
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-```
 
-For the React visualization:
+# Add the dataset (required)
+# Place base_data_with_metrics.parquet or sample_dataset.xlsx in data/
 
-```bash
-cd frontend
-npm install
-cd ..
-```
-
-### 2. Add the Dataset
-
-Place the dataset file at:
-
-```bash
-data/sample_dataset.xlsx
-```
-
-### 3. Run the Training Pipeline
-
-```bash
+# Train the ML models
 python3 -m src.main --data-path data/sample_dataset.xlsx
-```
 
-Optional example with custom settings:
-
-```bash
-python3 -m src.main \
-  --data-path data/sample_dataset.xlsx \
-  --history-days 365 \
-  --test-horizon-hours 48 \
-  --forecast-horizon-hours 48 \
-  --random-state 7
-```
-
-Optional example with external weather enrichment:
-
-```bash
-python3 -m src.main --data-path data/sample_dataset.xlsx --weather-path ../weather_zip_city_2019_2023_meteostat
-```
-
-Optional example using the downloaded master archive directly:
-
-```bash
-python3 -m src.main --data-path "/Users/drona23/Downloads/Archive 3.zip"
-```
-
-When training completes, the pipeline writes:
-
-- XGBoost model bundles to `models/co2_model.pkl` and `models/wue_model.pkl`
-- per-city Prophet artifacts under `models/prophet_models/`
-- next-horizon forecasts under `data/processed/`
-
-### 4. Build Workload Jobs from the Azure Trace
-
-```bash
-python3 -m src.workload_loader \
-  --input-path data/external/azure_packing/packing_trace_zone_a_v1.sqlite \
-  --output-path data/processed/azure_jobs_sample.csv \
-  --limit 5000 \
-  --start-datetime "2019-01-01 00:00:00"
-```
-
-### 5. Run the Scheduling Pipeline
-
-```bash
-python3 -m src.scheduling \
-  --data-path "/Users/drona23/Downloads/Archive 3.zip" \
-  --jobs-path data/processed/azure_jobs_sample.csv \
-  --dc-config-path data/templates/dc_config_template.csv \
-  --job-limit 100 \
-  --output-path data/processed/schedule_results.csv
-```
-
-### 6. Explore the Notebook
-
-The exploratory analysis notebook is located at:
-
-- [notebooks/eda.ipynb](notebooks/eda.ipynb)
-
-It can be used to inspect distributions, temporal trends, regional differences,
-and feature relationships before formal model training.
-
-### 7. Launch the API
-
-```bash
+# Start the API
 python3 -m uvicorn src.api:app --reload
+
+# In a second terminal, start the frontend
+cd frontend && npm install && npm run dev
+# Open http://localhost:5173
 ```
 
-### 8. Launch the React Visualization
+---
 
-In a second terminal:
+## Tuning the Models (Optional)
+
+The default XGBoost settings work well. To automatically find better ones:
 
 ```bash
-cd frontend
-npm run dev
+# Search 40 parameter combinations per model (~5 minutes)
+python3 -m src.tune
+
+# Re-train using the best parameters found above
+python3 -m src.main
 ```
 
-Open the local Vite URL, usually:
+Results are saved to `models/best_params.json`. Training picks them up automatically next time.
 
-- `http://127.0.0.1:5173`
+---
 
-The React interface provides:
+## Running Tests
 
-- a large interactive U.S. map with node coloring for CO2 and sizing for WUE
-- a single-job mode for low-carbon, low-water, balanced, and low-latency route options
-- a batch mode for 50-200 jobs with aggregated flow bands and baseline overlays
-- a compact control panel for priority, weights, time, and batch size
-- an insight panel explaining either the recommended route or the optimized batch behavior
+```bash
+python3 -m pytest tests/ -v
+# Expected: 32 passed, 1 skipped
+```
 
-The repository now exposes the scheduling simulation through FastAPI and ships a
-React frontend for local visualization and demos.
+Tests cover three areas:
+- **Unit tests** — the scheduler's scoring formula and job builder
+- **API tests** — every endpoint with valid and invalid inputs
+- **SHAP tests** — the explainer's output shape and sorting (skipped if shap not installed)
 
-Core API endpoints:
+---
 
-- `GET /health`
-- `GET /context`
-- `POST /simulate`
-- `POST /simulate-batch`
+## API Endpoints
 
-Single-job clients can call `POST /simulate` with:
+| Endpoint | What it does |
+|---|---|
+| `GET /health` | Check the server is running |
+| `GET /context` | Get available cities, time range, and default settings |
+| `POST /simulate` | Get a routing recommendation for one job |
+| `POST /simulate-batch` | Schedule 50–200 jobs across data centers |
+| `GET /explain` | Explain why a city got a particular CO₂ or WUE prediction |
 
-- `priority`
-- `alpha`
-- `beta`
-- `gamma`
-- `time`
-- `latency_sensitivity`
-- `workload_size`
-- `origin_city`
+### Example: get a routing recommendation
 
-Batch clients can call `POST /simulate-batch` with:
+```bash
+curl -X POST http://localhost:8000/simulate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "priority": "medium",
+    "time": "2024-06-01T14:00",
+    "alpha": 1.0,
+    "beta": 1.0,
+    "gamma": 1.0
+  }'
+```
 
-- `priority`
-- `alpha`
-- `beta`
-- `gamma`
-- `time`
-- `latency_sensitivity`
-- `batch_size`
-- `workload_size`
-- `origin_city`
+### Example: explain a prediction
 
-and receive candidate routes with carbon, water, latency, score, and route
-metadata for presentation or product integration.
+```bash
+curl "http://localhost:8000/explain?city=Dallas&target=co2&time=2024-06-01T14:00"
+```
 
-## Project Structure
+Returns which features (temperature, time of day, fuel mix) pushed the CO₂ prediction up or down, and by how much.
 
-```text
+---
+
+## The Scheduling Formula
+
+The scheduler picks the city that minimises this score for each job:
+
+```
+score = α × (CO₂ intensity × server efficiency)
+      + β × (water usage × local water scarcity)
+      + γ × (distance penalty — 0 if same city, 1 if different)
+```
+
+You control α, β, and γ through sliders in the dashboard:
+- **α = 2, β = 0, γ = 0** → pure carbon optimisation, ignore water and distance
+- **α = 0, β = 0, γ = 2** → always send to nearest data center
+- **α = 1, β = 1, γ = 1** → balanced trade-off (default)
+
+---
+
+## Project Files
+
+```
 Capstone_Research/
-├── data/
-│   ├── reference/
-│   │   └── city_coordinates.csv
-│   ├── processed/
-│   │   ├── city_forecasts_24h.csv
-│   │   └── city_forecasts_48h.csv
-│   ├── sample_dataset.xlsx
-│   └── templates/
-│       └── dc_config_template.csv
-├── models/
-│   ├── co2_model.pkl
-│   ├── wue_model.pkl
-│   └── prophet_models/
-├── notebooks/
-│   └── eda.ipynb
-├── frontend/
-│   ├── src/
-│   ├── package.json
-│   └── vite.config.ts
-├── src/
-│   ├── __init__.py
-│   ├── app_backend.py
-│   ├── api.py
-│   ├── data_loader.py
-│   ├── evaluate.py
-│   ├── main.py
-│   ├── preprocessing.py
-│   ├── runtime.py
-│   ├── scheduling.py
-│   ├── train.py
-│   ├── weather_loader.py
-│   └── workload_loader.py
-├── docs/
-│   ├── data_requirements.md
-│   └── workload_trace_guide.md
-├── requirements.txt
-├── .gitignore
-└── README.md
+│
+├── src/                     Python source code
+│   ├── fetch_eia.py         Downloads electricity grid data from EIA
+│   ├── fetch_weather.py     Downloads weather data from Open-Meteo
+│   ├── build_dataset.py     Merges EIA + weather into one dataset
+│   ├── preprocessing.py     Cleans data and builds ML features
+│   ├── train.py             Trains XGBoost + Prophet + Hybrid models
+│   ├── tune.py              Finds best XGBoost settings using Optuna
+│   ├── explain.py           Explains predictions using SHAP
+│   ├── scheduling.py        Routes jobs to optimal data centers
+│   ├── api.py               FastAPI web server
+│   ├── app_backend.py       Backend logic used by the API
+│   ├── weather_loader.py    Loads weather data (CSV or live pipeline)
+│   └── workload_loader.py   Converts Azure VM trace into job records
+│
+├── frontend/                React web dashboard
+│   ├── src/components/      Map, control panel, insight panel
+│   ├── nginx.conf           Routes API calls to backend in Docker
+│   └── Dockerfile           Builds frontend for Docker
+│
+├── tests/                   Automated tests
+│   ├── test_scheduling.py   Tests the scoring formula
+│   ├── test_api.py          Tests every API endpoint
+│   └── test_explain.py      Tests the SHAP explainer output
+│
+├── models/                  Saved ML models (not in git — too large)
+│   ├── co2_model.pkl        Carbon intensity model bundle
+│   ├── wue_model.pkl        Water usage model bundle
+│   └── best_params.json     Optuna tuning results (created by tune.py)
+│
+├── data/                    Datasets (not in git — too large)
+│   ├── processed/           Model forecasts and schedule outputs
+│   ├── reference/           City coordinates
+│   └── templates/           Data center configuration template
+│
+├── Dockerfile               Builds the Python backend for Docker
+├── docker-compose.yml       Starts backend + frontend together
+├── requirements.txt         Python package versions
+└── pytest.ini               Test configuration
 ```
 
-## Future Work
+---
 
-The project can be extended in several important directions:
+## Data Sources (all free)
 
-- optimize the current baseline through hyperparameter tuning
-- extend the hybrid XGBoost + Prophet forecasting pipeline with more tuning and
-  diagnostics
-- incorporate feature selection and model explainability methods
-- expand evaluation with cross-validation and temporal holdout strategies
-- build a recommendation layer for workload shifting and greener scheduling
-- package the workflow into a reproducible cloud pipeline on AWS
-- move data ingestion, training, and reporting into an automated MLOps workflow
+| Source | What it provides |
+|---|---|
+| [EIA Open Data](https://www.eia.gov/opendata/) | Hourly electricity generation mix for 7 US grid regions |
+| [Open-Meteo](https://open-meteo.com/) | Historical hourly weather — no API key needed |
+| [EPA eGRID](https://www.epa.gov/egrid) | How much CO₂ each fuel type produces |
+| [Azure Public Dataset](https://github.com/Azure/AzurePublicDataset) | 2.2 million real Microsoft VM job records |
 
-## Research Framing
+---
 
-This repository is structured as a research-oriented machine learning project:
-it combines exploratory analysis, modular preprocessing, baseline modeling, and
-reproducible evaluation into a foundation that can support deeper experimental
-work on sustainable AI infrastructure.
+## Tech Stack
 
-For the exact list of remaining data gaps and source links, see
-[docs/data_requirements.md](docs/data_requirements.md).
+| What | How |
+|---|---|
+| ML models | XGBoost, Prophet, scikit-learn |
+| Hyperparameter search | Optuna (Bayesian, not random) |
+| Model explanations | SHAP (TreeExplainer) |
+| API | FastAPI + Uvicorn |
+| Dashboard | React 19, TypeScript, MapLibre GL |
+| Containers | Docker Compose |
+| Tests | pytest |
 
-For the recommended public workload trace and conversion workflow, see
-[docs/workload_trace_guide.md](docs/workload_trace_guide.md).
+---
 
-For the first runnable scheduler and the starter data-center configuration
-template, use [src/scheduling.py](src/scheduling.py) and
-[data/templates/dc_config_template.csv](data/templates/dc_config_template.csv).
+*For data source details and gaps, see [docs/data_requirements.md](docs/data_requirements.md)*
+*For the Azure trace setup, see [docs/workload_trace_guide.md](docs/workload_trace_guide.md)*

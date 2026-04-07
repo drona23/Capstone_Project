@@ -40,6 +40,7 @@ if __package__:
         select_recent_history,
         split_time_train_test,
     )
+    from .tune import load_best_params
     from .weather_loader import load_weather_dataset, merge_weather_features
 else:
     from data_loader import PROJECT_ROOT, load_dataset
@@ -55,6 +56,7 @@ else:
         select_recent_history,
         split_time_train_test,
     )
+    from tune import load_best_params
     from weather_loader import load_weather_dataset, merge_weather_features
 
 
@@ -94,20 +96,45 @@ def _slugify(value: str) -> str:
     return slug or "unknown_city"
 
 
-def build_xgboost_regressor(random_state: int = 42) -> XGBRegressor:
+def build_xgboost_regressor(
+    random_state: int = 42,
+    target_key: str | None = None,
+) -> XGBRegressor:
+    """
+    Build an XGBRegressor, using tuned hyperparameters if available.
+
+    If models/best_params.json exists (written by src/tune.py), the tuned
+    params for target_key are loaded and override the defaults below.
+    If not, the hand-tuned defaults are used — training still works.
+    """
     _require_optional_dependencies()
+
+    # Default hand-tuned params
+    params: dict = {
+        "n_estimators": 300,
+        "learning_rate": 0.05,
+        "max_depth": 6,
+        "subsample": 0.85,
+        "colsample_bytree": 0.85,
+        "min_child_weight": 1,
+        "reg_lambda": 1.0,
+        "reg_alpha": 0.0,
+        "gamma": 0.0,
+    }
+
+    # Override with tuned params if available for this target
+    if target_key is not None:
+        tuned = load_best_params(target_key)
+        if tuned:
+            params.update(tuned)
+
     return XGBRegressor(
         objective="reg:squarederror",
-        n_estimators=300,
-        learning_rate=0.05,
-        max_depth=6,
-        subsample=0.85,
-        colsample_bytree=0.85,
-        reg_lambda=1.0,
-        random_state=random_state,
-        n_jobs=4,
         tree_method="hist",
+        n_jobs=4,
         verbosity=0,
+        random_state=random_state,
+        **params,
     )
 
 
@@ -194,8 +221,9 @@ def _fit_xgboost_target(
     features: pd.DataFrame,
     target: pd.Series,
     random_state: int,
+    target_key: str | None = None,
 ) -> XGBRegressor:
-    model = build_xgboost_regressor(random_state=random_state)
+    model = build_xgboost_regressor(random_state=random_state, target_key=target_key)
     model.fit(features, target)
     return model
 
@@ -249,11 +277,11 @@ def _train_single_target(
     prophet_train_pred = predict_with_prophet(train_frame, prophet_models, city_fallbacks, global_fallback)
     prophet_test_pred = predict_with_prophet(test_frame, prophet_models, city_fallbacks, global_fallback)
 
-    direct_model = _fit_xgboost_target(X_train, y_train, random_state=random_state)
+    direct_model = _fit_xgboost_target(X_train, y_train, random_state=random_state, target_key=target_key)
     direct_test_pred = pd.Series(direct_model.predict(X_test), index=test_frame.index, dtype=float)
 
     residual_target = y_train - prophet_train_pred
-    residual_model = _fit_xgboost_target(X_train, residual_target, random_state=random_state)
+    residual_model = _fit_xgboost_target(X_train, residual_target, random_state=random_state, target_key=target_key)
     hybrid_test_pred = prophet_test_pred + pd.Series(
         residual_model.predict(X_test),
         index=test_frame.index,
@@ -287,11 +315,12 @@ def _train_single_target(
         final_city_fallbacks,
         final_global_fallback,
     )
-    final_direct_model = _fit_xgboost_target(X_final, y_final, random_state=random_state)
+    final_direct_model = _fit_xgboost_target(X_final, y_final, random_state=random_state, target_key=target_key)
     final_residual_model = _fit_xgboost_target(
         X_final,
         y_final - final_prophet_history,
         random_state=random_state,
+        target_key=target_key,
     )
 
     X_future, _ = build_feature_matrix(

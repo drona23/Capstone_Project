@@ -142,6 +142,21 @@ export interface BatchSimulationResponse {
   insight: SimulationInsight
 }
 
+export interface ShapFeature {
+  name: string
+  raw_name: string
+  value: number
+  shap_value: number
+}
+
+export interface ExplanationResponse {
+  city: string
+  target: 'co2' | 'wue'
+  prediction: number
+  base_value: number
+  features: ShapFeature[]
+}
+
 export interface SimulationControls {
   mode: SimulationMode
   priority: Priority

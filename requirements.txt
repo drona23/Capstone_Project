@@ -18,3 +18,5 @@ pulp==3.3.0
 plotly==6.6.0
 fastapi==0.128.8
 uvicorn==0.39.0
+shap==0.47.2
+optuna==4.3.0

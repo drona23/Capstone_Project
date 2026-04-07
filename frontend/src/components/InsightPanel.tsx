@@ -1,12 +1,15 @@
+import { useEffect, useState } from 'react'
 import type {
   BatchFlow,
   BatchSimulationResponse,
+  ExplanationResponse,
   PathCandidate,
   PathType,
   SimulationMode,
   SimulationResponse,
 } from '../lib/types'
 import { formatLatency, formatPercent, formatDatetimeLabel } from '../lib/format'
+import { fetchExplanation } from '../api/schedulerApi'
 
 const PATH_LABELS: Record<PathType, string> = {
   balanced: 'Balanced',
@@ -24,6 +27,95 @@ interface InsightPanelProps {
   highlightedFlowId: string | null
   onHighlightPath: (pathType: PathType) => void
   onHighlightFlow: (flowId: string) => void
+}
+
+const TARGET_UNIT: Record<'co2' | 'wue', string> = {
+  co2: 'kg CO₂/kWh',
+  wue: 'L/kWh (WUE)',
+}
+
+function ShapChart({ city, time }: { city: string; time: string }) {
+  const [co2Data, setCo2Data] = useState<ExplanationResponse | null>(null)
+  const [wueData, setWueData] = useState<ExplanationResponse | null>(null)
+  const [activeTarget, setActiveTarget] = useState<'co2' | 'wue'>('co2')
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setCo2Data(null)
+    setWueData(null)
+
+    Promise.all([
+      fetchExplanation(city, 'co2', time),
+      fetchExplanation(city, 'wue', time),
+    ])
+      .then(([co2, wue]) => {
+        if (cancelled) return
+        setCo2Data(co2)
+        setWueData(wue)
+      })
+      .catch(() => { /* silently ignore — SHAP is optional enrichment */ })
+      .finally(() => { if (!cancelled) setLoading(false) })
+
+    return () => { cancelled = true }
+  }, [city, time])
+
+  const data = activeTarget === 'co2' ? co2Data : wueData
+  if (loading) {
+    return <p className="shap-loading">Computing feature importance…</p>
+  }
+  if (!data) return null
+
+  const maxAbs = Math.max(...data.features.map(f => Math.abs(f.shap_value)), 0.0001)
+
+  return (
+    <div className="panel__subsection">
+      <div className="panel__subheader">
+        <h3>Why this prediction?</h3>
+        <div className="shap-toggle">
+          <button
+            type="button"
+            className={activeTarget === 'co2' ? 'is-active' : ''}
+            onClick={() => setActiveTarget('co2')}
+          >
+            CO₂
+          </button>
+          <button
+            type="button"
+            className={activeTarget === 'wue' ? 'is-active' : ''}
+            onClick={() => setActiveTarget('wue')}
+          >
+            WUE
+          </button>
+        </div>
+      </div>
+      <p className="shap-legend">
+        Predicted {TARGET_UNIT[activeTarget]}: <strong>{data.prediction.toFixed(4)}</strong>
+        {' '}(baseline: {data.base_value.toFixed(4)})
+      </p>
+      <div className="shap-bars">
+        {data.features.map(f => {
+          const pct = (Math.abs(f.shap_value) / maxAbs) * 100
+          const positive = f.shap_value > 0
+          return (
+            <div key={f.raw_name} className="shap-row">
+              <span className="shap-row__label" title={f.raw_name}>{f.name}</span>
+              <div className="shap-row__track">
+                <div
+                  className={`shap-row__bar ${positive ? 'shap-row__bar--up' : 'shap-row__bar--down'}`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <span className={`shap-row__value ${positive ? 'shap-value--up' : 'shap-value--down'}`}>
+                {positive ? '+' : ''}{f.shap_value.toFixed(4)}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 function pathLabel(path: PathCandidate | null): string {
@@ -106,6 +198,10 @@ function renderSingleView(
           ))}
         </div>
       </div>
+
+      {selectedPath && (
+        <ShapChart city={selectedPath.assigned_city} time={simulation.time} />
+      )}
     </>
   )
 }

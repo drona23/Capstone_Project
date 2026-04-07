@@ -14,6 +14,7 @@ from .app_backend import (
     SustainabilitySchedulingBackend,
     resolve_default_paths,
 )
+from .explain import compute_shap
 
 
 class SimulationRequest(BaseModel):
@@ -222,3 +223,23 @@ def simulate_batch(request: BatchSimulationRequest) -> dict[str, Any]:
         )
     )
     return payload
+
+
+@app.get("/explain")
+def explain(city: str, target: str, time: str) -> dict[str, Any]:
+    """
+    Return SHAP feature importances for a city's CO2 or WUE prediction.
+
+    Query params:
+        city   — data center city name
+        target — 'co2' or 'wue'
+        time   — ISO 8601 timestamp
+    """
+    if target not in ("co2", "wue"):
+        raise HTTPException(status_code=422, detail="target must be 'co2' or 'wue'")
+    try:
+        return compute_shap(target=target, city=city, time=time)
+    except (FileNotFoundError, ModuleNotFoundError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Explanation failed: {exc}") from exc
