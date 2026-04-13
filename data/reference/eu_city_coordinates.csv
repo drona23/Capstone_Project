@@ -1,0 +1,11 @@
+city,country,latitude,longitude,capacity_mw,category,entso_zone
+Dublin,IE,53.3498,-6.2603,600,hyperscaler,IE
+Amsterdam,NL,52.3676,4.9041,800,hyperscaler,NL
+Frankfurt,DE,50.1109,8.6821,900,hyperscaler,DE-LU
+London,GB,51.5074,-0.1278,700,hyperscaler,GB
+Paris,FR,48.8566,2.3522,750,hyperscaler,FR
+Stockholm,SE,59.3293,18.0686,500,hyperscaler,SE3
+Helsinki,FI,60.1699,24.9384,400,hyperscaler,FI
+Madrid,ES,40.4168,-3.7038,550,hyperscaler,ES
+Warsaw,PL,52.2297,21.0122,450,hyperscaler,PL
+Copenhagen,DK,55.6761,12.5683,400,hyperscaler,DK2

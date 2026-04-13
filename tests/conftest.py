@@ -79,6 +79,37 @@ def sample_dc_df() -> pd.DataFrame:
 
 
 @pytest.fixture
+def sample_env_df() -> pd.DataFrame:
+    """Environment data (CO2, WUE, water scarcity) for two cities over 72 hours."""
+    timestamps = pd.date_range("2024-06-01", periods=72, freq="h")
+    data = []
+    for i, ts in enumerate(timestamps):
+        # Dallas: varies between 0.3 and 0.5 kg CO2/kWh
+        dallas_co2 = 0.3 + 0.1 * (i % 24) / 24
+        # Atlanta: varies between 0.2 and 0.4 kg CO2/kWh (generally cleaner)
+        atlanta_co2 = 0.2 + 0.1 * (i % 24) / 24
+        data.extend([
+            {
+                "TIMESTAMP": ts,
+                "CITY": "Dallas",
+                "co2_kg": dallas_co2 * 1000,  # Assuming 1000 kWh for this hour
+                "total_gen_kwh": 1000.0,
+                "WUE_total": 1.5,  # Water Usage Efficiency
+                "dsci_0_500": 300.0,  # Water scarcity index
+            },
+            {
+                "TIMESTAMP": ts,
+                "CITY": "Atlanta",
+                "co2_kg": atlanta_co2 * 1000,
+                "total_gen_kwh": 1000.0,
+                "WUE_total": 1.2,
+                "dsci_0_500": 150.0,
+            },
+        ])
+    return pd.DataFrame(data)
+
+
+@pytest.fixture
 def sample_schedule_df() -> pd.DataFrame:
     """A small schedule result DataFrame mimicking scheduler output."""
     return pd.DataFrame([

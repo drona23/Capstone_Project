@@ -23,6 +23,11 @@ try:
         schedule_jobs_naive,
         summarize_schedule,
     )
+    from .baselines import (
+        baseline_random,
+        baseline_nearest_neighbor,
+        baseline_time_of_day_heuristic,
+    )
 except ImportError:
     from data_loader import PROJECT_ROOT, load_dataset
     from scheduling import (
@@ -38,6 +43,11 @@ except ImportError:
         schedule_jobs,
         schedule_jobs_naive,
         summarize_schedule,
+    )
+    from baselines import (
+        baseline_random,
+        baseline_nearest_neighbor,
+        baseline_time_of_day_heuristic,
     )
 
 
@@ -972,6 +982,166 @@ class SustainabilitySchedulingBackend:
             "water_reduction_pct": reduction(baseline_wue, selected_wue),
             "latency_delta_ms": selected_latency - baseline_latency,
             "latency_delta_pct": delta_pct(selected_latency, baseline_latency),
+        }
+
+    def run_baseline_comparison(
+        self,
+        start_time: pd.Timestamp,
+        batch_size: int = 50,
+        priority: str = "medium",
+    ) -> dict[str, Any]:
+        """Compare optimal scheduler vs three baselines on same batch."""
+        from .scheduling import prepare_scheduler_state
+
+        # Prepare state (self.env_df is already prepared)
+        prepared_state = prepare_scheduler_state(self.env_df, self.dc_df)
+
+        # Load and shift jobs
+        end_time = start_time + pd.Timedelta(hours=48)
+        jobs = self._shift_trace_jobs_to_window(start_time, end_time)
+
+        # Limit batch
+        jobs_batch = jobs.head(batch_size).copy()
+        if jobs_batch.empty:
+            return {
+                "timestamp": start_time.isoformat(),
+                "batch_size": 0,
+                "results": [],
+                "summary": "No jobs available for this time window",
+            }
+
+        # Run each strategy
+        strategies = {
+            "optimal": {
+                "name": "Optimal (Your Method)",
+                "co2_total": 0.0,
+                "water_total": 0.0,
+                "jobs_scheduled": 0,
+            },
+            "random": {
+                "name": "Random Routing",
+                "co2_total": 0.0,
+                "water_total": 0.0,
+                "jobs_scheduled": 0,
+            },
+            "nearest": {
+                "name": "Nearest Data Center",
+                "co2_total": 0.0,
+                "water_total": 0.0,
+                "jobs_scheduled": 0,
+            },
+            "time_of_day": {
+                "name": "Time-of-Day Heuristic",
+                "co2_total": 0.0,
+                "water_total": 0.0,
+                "jobs_scheduled": 0,
+            },
+        }
+
+        # Run optimal scheduler
+        for _, job in jobs_batch.iterrows():
+            from .scheduling import list_job_candidates
+            candidates_df = list_job_candidates(
+                env_df=self.env_df,
+                dc_df=self.dc_df,
+                job=job,
+                alpha=1.0,
+                beta=1.0,
+                gamma=1.0,
+                prepared_state=prepared_state,
+            )
+            if not candidates_df.empty:
+                best_row = candidates_df.loc[candidates_df["scheduler_score"].idxmin()]
+                strategies["optimal"]["co2_total"] += float(best_row["expected_co2_kg"])
+                strategies["optimal"]["water_total"] += float(best_row["expected_water_liters"])
+                strategies["optimal"]["jobs_scheduled"] += 1
+
+        # Run random baseline
+        for _, job in jobs_batch.iterrows():
+            result = baseline_random(job, prepared_state)
+            if result:
+                strategies["random"]["co2_total"] += result.expected_co2_kg
+                strategies["random"]["water_total"] += result.expected_water_liters
+                strategies["random"]["jobs_scheduled"] += 1
+
+        # Run nearest baseline
+        for _, job in jobs_batch.iterrows():
+            result = baseline_nearest_neighbor(job, prepared_state)
+            if result:
+                strategies["nearest"]["co2_total"] += result.expected_co2_kg
+                strategies["nearest"]["water_total"] += result.expected_water_liters
+                strategies["nearest"]["jobs_scheduled"] += 1
+
+        # Run time-of-day baseline
+        for _, job in jobs_batch.iterrows():
+            result = baseline_time_of_day_heuristic(job, prepared_state)
+            if result:
+                strategies["time_of_day"]["co2_total"] += result.expected_co2_kg
+                strategies["time_of_day"]["water_total"] += result.expected_water_liters
+                strategies["time_of_day"]["jobs_scheduled"] += 1
+
+        # Calculate reductions vs baselines
+        optimal_co2 = strategies["optimal"]["co2_total"]
+        optimal_water = strategies["optimal"]["water_total"]
+
+        def calc_reduction(baseline_total: float, optimal_total: float) -> float:
+            if baseline_total == 0:
+                return 0.0
+            return ((baseline_total - optimal_total) / baseline_total) * 100.0
+
+        results = []
+        for key, stats in strategies.items():
+            result_item = {
+                "strategy": stats["name"],
+                "jobs_scheduled": stats["jobs_scheduled"],
+                "total_co2_kg": round(stats["co2_total"], 2),
+                "total_water_liters": round(stats["water_total"], 2),
+                "avg_co2_per_job": (
+                    round(stats["co2_total"] / stats["jobs_scheduled"], 4)
+                    if stats["jobs_scheduled"] > 0
+                    else 0.0
+                ),
+                "avg_water_per_job": (
+                    round(stats["water_total"] / stats["jobs_scheduled"], 4)
+                    if stats["jobs_scheduled"] > 0
+                    else 0.0
+                ),
+            }
+
+            # Add reduction metrics relative to each baseline
+            if key != "optimal":
+                result_item["co2_reduction_vs_optimal_pct"] = calc_reduction(
+                    stats["co2_total"], optimal_co2
+                )
+                result_item["water_reduction_vs_optimal_pct"] = calc_reduction(
+                    stats["water_total"], optimal_water
+                )
+
+            results.append(result_item)
+
+        # Calculate averages
+        avg_co2_random = (
+            strategies["random"]["co2_total"] / strategies["random"]["jobs_scheduled"]
+            if strategies["random"]["jobs_scheduled"] > 0
+            else 0.0
+        )
+        avg_co2_optimal = (
+            strategies["optimal"]["co2_total"] / strategies["optimal"]["jobs_scheduled"]
+            if strategies["optimal"]["jobs_scheduled"] > 0
+            else 0.0
+        )
+
+        co2_improvement = calc_reduction(avg_co2_random, avg_co2_optimal)
+
+        return {
+            "timestamp": start_time.isoformat(),
+            "batch_size": int(batch_size),
+            "results": results,
+            "summary": {
+                "total_jobs_in_batch": len(jobs_batch),
+                "co2_improvement_vs_random_pct": round(co2_improvement, 2),
+                "winner": "Optimal" if optimal_co2 <= strategies["random"]["co2_total"] else "Random",
+            },
         }
 
     @classmethod

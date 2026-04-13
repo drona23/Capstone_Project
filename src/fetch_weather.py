@@ -98,8 +98,12 @@ def fetch_city_weather(
     return df
 
 
-def fetch_all(start_date: str, end_date: str) -> pd.DataFrame:
-    coords = pd.read_csv(COORDS_PATH)
+def fetch_all(
+    start_date: str,
+    end_date: str,
+    coords_path: Path = COORDS_PATH,
+) -> pd.DataFrame:
+    coords = pd.read_csv(coords_path)
     all_frames: list[pd.DataFrame] = []
 
     print(f"Fetching weather for {len(coords)} locations ({start_date} → {end_date})")
@@ -133,9 +137,14 @@ def main() -> None:
     parser.add_argument("--start", default="2022-01-01", help="Start date YYYY-MM-DD")
     parser.add_argument("--end", default="2023-12-31", help="End date YYYY-MM-DD")
     parser.add_argument("--output", default=str(OUTPUT_PATH), help="Output CSV path")
+    parser.add_argument(
+        "--coords",
+        default=str(COORDS_PATH),
+        help="City coordinates CSV (use eu_city_coordinates.csv for EU weather)",
+    )
     args = parser.parse_args()
 
-    df = fetch_all(args.start, args.end)
+    df = fetch_all(args.start, args.end, coords_path=Path(args.coords))
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

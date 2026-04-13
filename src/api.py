@@ -15,6 +15,12 @@ from .app_backend import (
     resolve_default_paths,
 )
 from .explain import compute_shap
+from .baselines import (
+    baseline_random,
+    baseline_nearest_neighbor,
+    baseline_time_of_day_heuristic,
+    BaselineResult,
+)
 
 
 class SimulationRequest(BaseModel):
@@ -37,6 +43,12 @@ class BatchSimulationRequest(BaseModel):
     time: str
     latency_sensitivity: float = Field(default=0.55, ge=0.0, le=1.0)
     batch_size: int = Field(default=100, ge=50, le=200)
+
+
+class BaselineComparisonRequest(BaseModel):
+    priority: str = Field(default="medium", pattern="^(low|medium|high)$")
+    time: str
+    batch_size: int = Field(default=50, ge=10, le=200)
 
 
 app = FastAPI(
@@ -243,3 +255,27 @@ def explain(city: str, target: str, time: str) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Explanation failed: {exc}") from exc
+
+
+@app.post("/compare-baselines")
+def compare_baselines(request: BaselineComparisonRequest) -> dict[str, Any]:
+    """
+    Compare optimal scheduler against three baselines (random, nearest, time-of-day).
+
+    Returns carbon and water footprint for each strategy on the same batch.
+    """
+    backend = get_backend()
+    try:
+        start_time = pd.Timestamp(request.time).floor("h")
+    except Exception as exc:  # pragma: no cover - request validation guard.
+        raise HTTPException(status_code=422, detail=f"Invalid time: {exc}") from exc
+
+    try:
+        results = backend.run_baseline_comparison(
+            start_time=start_time,
+            batch_size=int(request.batch_size),
+            priority=request.priority,
+        )
+        return results
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Comparison failed: {exc}") from exc
