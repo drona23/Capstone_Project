@@ -4,7 +4,7 @@ fetch_eia.py
 Fetch hourly electricity generation mix from the EIA (Energy Information
 Administration) for the 7 grid regions covering your 28 AI data center locations.
 
-EIA API is completely free — register for a key at:
+EIA API is free to use. Register for a key at:
 https://www.eia.gov/opendata/register.php  (instant approval)
 
 Produces: data/processed/eia_generation_mix.csv
@@ -86,7 +86,7 @@ def fetch_region_generation(
         resp = requests.get(GEN_URL, params=params, timeout=60)
 
     if resp.status_code != 200:
-        print(f" [WARN] EIA {ba}: {resp.status_code} — {resp.text[:120]}")
+        print(f" [WARN] EIA {ba}: {resp.status_code}: {resp.text[:120]}")
         return []
 
     return resp.json().get("response", {}).get("data", [])
@@ -115,13 +115,32 @@ def fetch_all_pages(api_key: str, ba: str, start: str, end: str) -> pd.DataFrame
 
 def process_region(df: pd.DataFrame, ba: str) -> pd.DataFrame:
     """Clean and pivot raw EIA rows into wide format with one column per fuel type."""
-    df = df.rename(columns={"period": "timestamp", "type-name": "fuel_label"})
+    df = df.copy().rename(columns={"period": "timestamp"})
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
     df["generation_mwh"] = pd.to_numeric(df["value"], errors="coerce").fillna(0)
-    df["fuel_code"] = df["type-name"] if "type-name" in df.columns else df.get("fueltype", "OTH")
+
+    fuel_column = next(
+        (column for column in ("type", "fueltype", "type-name") if column in df.columns),
+        None,
+    )
+    if fuel_column is None:
+        raise ValueError("EIA response is missing a fuel type column.")
+    df["fuel_code"] = df[fuel_column].astype(str).str.strip().str.upper()
 
     # Normalise fuel codes to our standard names
-    df["fuel"] = df["fuel_code"].map(FUEL_TYPES).fillna("other")
+    label_aliases = {
+        "COAL": "coal",
+        "NATURAL GAS": "natural_gas",
+        "NUCLEAR": "nuclear",
+        "SOLAR": "solar",
+        "WIND": "wind",
+        "HYDRO": "hydro",
+        "PETROLEUM": "petroleum",
+        "OTHER": "other",
+    }
+    df["fuel"] = (
+        df["fuel_code"].map(FUEL_TYPES).fillna(df["fuel_code"].map(label_aliases))
+    ).fillna("other")
 
     # Pivot: one row per timestamp, one column per fuel
     pivoted = (
@@ -138,7 +157,7 @@ def process_region(df: pd.DataFrame, ba: str) -> pd.DataFrame:
 
     pivoted["total_mwh"] = pivoted[[f for f in FUEL_TYPES.values()]].sum(axis=1)
 
-    # Compute fuel share fractions (0–1)
+    # Compute fuel share fractions from 0 to 1.
     for fuel in FUEL_TYPES.values():
         pivoted[f"{fuel}_share"] = (
             pivoted[fuel] / pivoted["total_mwh"].replace(0, float("nan"))
@@ -153,11 +172,11 @@ def process_region(df: pd.DataFrame, ba: str) -> pd.DataFrame:
 def fetch_all(api_key: str, start: str, end: str) -> pd.DataFrame:
     all_frames: list[pd.DataFrame] = []
 
-    print(f"Fetching EIA generation mix for {len(BA_REGIONS)} regions ({start} → {end})")
+    print(f"Fetching EIA generation mix for {len(BA_REGIONS)} regions ({start} to {end})")
     print("Source: EIA Open Data API (free)\n")
 
     for ba in BA_REGIONS:
-        print(f"  → {ba}", end=" ... ", flush=True)
+        print(f"  {ba}", end=" ... ", flush=True)
         raw = fetch_all_pages(api_key, ba, start, end)
 
         if raw.empty:
@@ -166,11 +185,12 @@ def fetch_all(api_key: str, start: str, end: str) -> pd.DataFrame:
 
         processed = process_region(raw, ba)
         all_frames.append(processed)
-        print(f"{len(processed):,} hourly rows | fuels: {[c for c in processed.columns if '_share' in c]}")
+        fuel_columns = [column for column in processed if column.endswith("_share")]
+        print(f"{len(processed):,} hourly rows | fuels: {fuel_columns}")
         time.sleep(0.5)
 
     if not all_frames:
-        raise RuntimeError("No EIA data fetched — check your API key and connectivity.")
+        raise RuntimeError("No EIA data fetched. Check your API key and connectivity.")
 
     return pd.concat(all_frames, ignore_index=True)
 
@@ -189,9 +209,9 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_path, index=False)
 
-    print(f"\nSaved {len(df):,} rows → {output_path}")
+    print(f"\nSaved {len(df):,} rows to {output_path}")
     print(f"Regions: {sorted(df['ba_region'].unique())}")
-    print(f"Date range: {df['timestamp'].min()} → {df['timestamp'].max()}")
+    print(f"Date range: {df['timestamp'].min()} to {df['timestamp'].max()}")
 
 
 if __name__ == "__main__":

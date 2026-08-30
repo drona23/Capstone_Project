@@ -1,0 +1,14 @@
+{
+  "benchmark": "synthetic-v1",
+  "claim_scope": "simulation only",
+  "forecast_repetitions": 10,
+  "hours_per_seed": 168,
+  "jobs_per_seed": 180,
+  "seed_count": 10,
+  "seed_start": 42,
+  "weights": {
+    "carbon": 0.55,
+    "relocation": 0.1,
+    "water": 0.35
+  }
+}

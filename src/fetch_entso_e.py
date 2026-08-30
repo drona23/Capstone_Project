@@ -4,7 +4,7 @@ fetch_entso_e.py
 Fetch hourly electricity generation mix from ENTSO-E Transparency Platform
 for the 10 EU data center zones.
 
-ENTSO-E API is free — register for a token at:
+ENTSO-E API is free to use. Register for a token at:
 https://transparency.entsoe.eu/usrm/user/createPublicUser
 
 Produces: data/processed/entso_e_generation_mix.csv
@@ -13,9 +13,9 @@ Columns per row:
   timestamp, zone, fuel_type, generation_mwh
 
 Fuel types mapped from ENTSO-E psrType codes to common names:
-  B01=biomass, B02=coal, B04=gas, B09=hydro, B10=hydro_pumped,
-  B11=hydro_run, B16=solar, B18=wind_offshore, B19=wind_onshore,
-  B13=nuclear, B17=other
+  B01=biomass, B02/B03/B05=coal, B04=gas, B06/B07=oil,
+  B10/B11/B12/B13=hydro, B14=nuclear, B17=solar,
+  B19/B20=wind, and remaining categories=other.
 
 Usage:
     python -m src.fetch_entso_e --token YOUR_TOKEN
@@ -26,11 +26,11 @@ from __future__ import annotations
 
 import argparse
 import time
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pandas as pd
 import requests
+from defusedxml import ElementTree as ET
 
 try:
     from .data_loader import PROJECT_ROOT
@@ -57,44 +57,29 @@ ZONE_EIC = {
 }
 
 # Map ENTSO-E psrType codes to readable fuel names
-# Codes from: https://transparency.entsoe.eu/content/static_content/Static content/web api/Guide.html
+# Codes follow the ENTSO-E Energy Identification Codes list.
 PSR_TYPE_MAP = {
     "B01": "biomass",
     "B02": "coal",
-    "B03": "gas",
+    "B03": "coal",
     "B04": "gas",
-    "B05": "coal",       # hard coal
+    "B05": "coal",
     "B06": "oil",
     "B07": "oil",
-    "B08": "oil",
-    "B09": "hydro",      # hydro water reservoir
-    "B10": "hydro",      # hydro pumped storage
-    "B11": "hydro",      # hydro run-of-river
-    "B12": "hydro",      # hydro marine
-    "B13": "nuclear",
-    "B14": "other",
+    "B08": "coal",
+    "B09": "other",
+    "B10": "hydro",
+    "B11": "hydro",
+    "B12": "hydro",
+    "B13": "hydro",
+    "B14": "nuclear",
     "B15": "other",
-    "B16": "solar",
-    "B17": "other",
-    "B18": "wind",       # wind offshore
-    "B19": "wind",       # wind onshore
-    "B20": "other",
+    "B16": "other",
+    "B17": "solar",
+    "B18": "other",
+    "B19": "wind",
+    "B20": "wind",
 }
-
-# EPA-style CO2 factors (kg CO2 per MWh) for ENTSO-E fuel types
-# Source: IPCC 2014, European Environment Agency
-CO2_KG_PER_MWH = {
-    "coal":    820.0,
-    "gas":     490.0,
-    "oil":     650.0,
-    "nuclear": 12.0,
-    "hydro":   4.0,
-    "solar":   45.0,
-    "wind":    11.0,
-    "biomass": 230.0,
-    "other":   400.0,
-}
-
 
 def _parse_generation_xml(xml_text: str, zone: str) -> list[dict]:
     """Parse ENTSO-E ActualGenerationPerProductionType XML response."""
@@ -119,16 +104,11 @@ def _parse_generation_xml(xml_text: str, zone: str) -> list[dict]:
             continue
 
         start_ts = pd.Timestamp(start_el.text, tz="UTC")
-        resolution = resolution_el.text  # PT60M or PT15M
-
-        if "60" in resolution:
-            freq_h = 1
-        elif "30" in resolution:
-            freq_h = 0
-        else:
-            freq_h = 0  # 15-minute; skip sub-hourly
-
-        if freq_h == 0:
+        resolution = resolution_el.text or ""
+        resolution_minutes = {"PT60M": 60, "PT30M": 30, "PT15M": 15}.get(
+            resolution
+        )
+        if resolution_minutes is None:
             continue
 
         for point in period.findall("ns:Point", ns):
@@ -143,17 +123,28 @@ def _parse_generation_xml(xml_text: str, zone: str) -> list[dict]:
             except (TypeError, ValueError):
                 continue
 
-            hour_offset = position - 1
-            timestamp = start_ts + pd.Timedelta(hours=hour_offset)
+            timestamp = start_ts + pd.Timedelta(
+                minutes=(position - 1) * resolution_minutes
+            )
             rows.append(
                 {
-                    "timestamp": timestamp.tz_localize(None),
+                    "timestamp": timestamp.floor("h").tz_localize(None),
                     "zone": zone,
                     "fuel_type": fuel,
-                    "generation_mwh": generation_mwh,
+                    "generation_mwh": generation_mwh
+                    * (resolution_minutes / 60.0),
                 }
             )
-    return rows
+    if not rows:
+        return []
+    hourly = (
+        pd.DataFrame(rows)
+        .groupby(["timestamp", "zone", "fuel_type"], as_index=False)[
+            "generation_mwh"
+        ]
+        .sum()
+    )
+    return hourly.to_dict(orient="records")
 
 
 def fetch_zone_generation(
@@ -177,7 +168,7 @@ def fetch_zone_generation(
         response = requests.get(ENTSO_E_BASE, params=params, timeout=30)
         response.raise_for_status()
     except requests.RequestException as exc:
-        print(f"  [WARN] {zone}: request failed — {exc}")
+        print(f"  [WARN] {zone}: request failed: {exc}")
         return []
 
     if "<html" in response.text.lower():
@@ -185,25 +176,6 @@ def fetch_zone_generation(
         return []
 
     return _parse_generation_xml(response.text, zone)
-
-
-def compute_co2_intensity(gen_df: pd.DataFrame) -> pd.DataFrame:
-    """Add co2_intensity_kg_per_kwh column to hourly generation totals."""
-    gen_df = gen_df.copy()
-    gen_df["co2_kg"] = gen_df["fuel_type"].map(CO2_KG_PER_MWH) * gen_df["generation_mwh"]
-
-    hourly = (
-        gen_df.groupby(["timestamp", "zone"])
-        .agg(
-            total_gen_mwh=("generation_mwh", "sum"),
-            total_co2_kg=("co2_kg", "sum"),
-        )
-        .reset_index()
-    )
-    hourly["co2_intensity_kg_per_kwh"] = (
-        hourly["total_co2_kg"] / (hourly["total_gen_mwh"] * 1000).replace(0, float("nan"))
-    )
-    return hourly
 
 
 def fetch_all_zones(
@@ -218,7 +190,7 @@ def fetch_all_zones(
     for zone, eic in ZONE_EIC.items():
         print(f"  Fetching {zone} ({eic})...")
         rows = fetch_zone_generation(token, zone, eic, start, end)
-        print(f"    → {len(rows):,} rows")
+        print(f"    {len(rows):,} rows")
         all_rows.extend(rows)
         time.sleep(sleep_s)
 
@@ -236,7 +208,7 @@ def main() -> None:
     parser.add_argument("--output", default=str(OUTPUT_PATH), help="Output CSV path")
     args = parser.parse_args()
 
-    print(f"Fetching ENTSO-E generation data: {args.start} → {args.end}")
+    print(f"Fetching ENTSO-E generation data: {args.start} to {args.end}")
     gen_df = fetch_all_zones(args.token, args.start, args.end)
 
     if gen_df.empty:
@@ -246,7 +218,7 @@ def main() -> None:
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     gen_df.to_csv(output_path, index=False)
-    print(f"\nSaved {len(gen_df):,} rows → {output_path}")
+    print(f"\nSaved {len(gen_df):,} rows to {output_path}")
 
 
 if __name__ == "__main__":

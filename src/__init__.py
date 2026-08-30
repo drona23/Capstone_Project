@@ -1,2 +1,1 @@
-"""Core package for the Capstone project pipeline."""
-
+"""Research package for carbon and water aware compute scheduling."""

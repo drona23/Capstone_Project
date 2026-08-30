@@ -13,7 +13,13 @@ except ImportError:
     from data_loader import PROJECT_ROOT
 
 
-DEFAULT_AZURE_TRACE_PATH = PROJECT_ROOT / "data" / "external" / "azure_packing" / "packing_trace_zone_a_v1.sqlite"
+DEFAULT_AZURE_TRACE_PATH = (
+    PROJECT_ROOT
+    / "data"
+    / "external"
+    / "azure_packing"
+    / "packing_trace_zone_a_v1.sqlite"
+)
 DEFAULT_CITY_POOL = [
     "Ashburn",
     "Atlanta",
@@ -126,7 +132,9 @@ def build_jobs_from_azure_trace(
     jobs["origin_city"] = _map_city_from_tenant(jobs["tenantId"], city_pool)
 
     # Power demand is not provided directly, so we proxy it with normalized CPU.
-    jobs["power_demand"] = (jobs["core"].fillna(0.05) * power_scale).round(2)
+    jobs["power_demand_kw"] = (
+        jobs["core"].fillna(0.05) * power_scale
+    ).round(2)
 
     jobs["deadline"] = jobs["earliest_start"] + pd.to_timedelta(
         jobs["duration_hours"] + slack_hours, unit="h"
@@ -136,7 +144,7 @@ def build_jobs_from_azure_trace(
     selected_columns = [
         "job_id",
         "origin_city",
-        "power_demand",
+        "power_demand_kw",
         "duration_hours",
         "earliest_start",
         "deadline",
@@ -194,7 +202,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--start-datetime",
         default="2019-01-01 00:00:00",
-        help="Anchor datetime for mapping relative Azure trace times into hourly scheduler timestamps.",
+        help=(
+            "Anchor datetime for mapping relative Azure trace times into hourly "
+            "scheduler timestamps."
+        ),
     )
     return parser.parse_args()
 

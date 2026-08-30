@@ -1,3 +1,0 @@
-region,n_cities,co2_min_kg_kwh,co2_max_kg_kwh,co2_spread_x,cleanest_city,dirtiest_city,jobs_total,jobs_scheduled,coverage_pct,naive_co2_kg,optimal_co2_kg,co2_reduction_pct,co2_saved_kg,co2_saved_per_job_kg,naive_water_l,optimal_water_l,water_reduction_pct,frac_to_top3_clean,top3_clean_cities
-US,28,0.2284,0.5954,2.6,Albany,Dona Ana County,100,100,100.0,10709.45,5051.1,52.8,5658.36,56.58,15657.7,13235.2,15.5,53.0,"Albany, Abilene, Armstrong County"
-EU,10,0.0146,0.5931,40.6,Stockholm,Warsaw,100,100,100.0,4388.73,767.64,82.5,3621.09,36.21,7695.3,3301.5,57.1,92.0,"Stockholm, Paris, Helsinki"
