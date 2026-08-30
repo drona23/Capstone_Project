@@ -1,0 +1,20 @@
+[project]
+name = "carbon-water-scheduler-research"
+version = "0.2.0"
+description = "Reproducible research benchmark for carbon and water aware compute scheduling"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 99
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+  "unit: pure in-memory test",
+  "integration: end-to-end offline test",
+]

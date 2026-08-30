@@ -14,17 +14,12 @@ venv/
 .ipynb_checkpoints/
 
 # Large local data files
-data/*.csv
-data/*.xlsx
-data/*.parquet
-data/*.feather
-data/*.h5
-data/*.zip
+data/raw/
 data/external/
 data/processed/
 
-# Local outputs
-models/
+# Local scratch outputs. Curated results in results/ are versioned.
+scratch/
 
 # OS files
 .DS_Store
